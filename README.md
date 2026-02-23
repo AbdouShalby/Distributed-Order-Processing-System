@@ -845,6 +845,94 @@ k6 run --out json=results.json load-tests/high-load-test.js
 
 ---
 
+## Testing Strategy
+
+**76 tests · 247 assertions** — covering domain logic, application use cases, HTTP lifecycle, and race-condition safety.
+
+### Test Pyramid
+
+```
+                ┌───────────────────┐
+                │  Feature Tests    │  18 tests
+                │  (HTTP + DB)      │  Full lifecycle, concurrency
+                ├───────────────────┤
+                │  Application      │  19 tests
+                │  Unit Tests       │  Use cases with mocked repos
+                ├───────────────────┤
+                │  Domain           │  39 tests (incl. data providers)
+                │  Unit Tests       │  Pure logic, no framework
+                └───────────────────┘
+```
+
+### Test Categories
+
+#### 1. Domain Unit Tests (Pure Logic — No Framework)
+
+| Test File | Tests | What It Validates |
+|-----------|-------|------------------|
+| `OrderStatusTest` | 3 methods (20 data-provider cases) | State machine transitions — 4 valid paths (PENDING→PROCESSING, PENDING→CANCELLED, PROCESSING→PAID, PROCESSING→FAILED), 11 invalid paths blocked, 3 terminal states verified |
+| `OrderEntityTest` | 14 | Entity behavior — state transitions via `markAsProcessing/Paid/Failed/Cancelled()`, `InvalidOrderTransitionException` for illegal transitions, `isCancellable()` / `isProcessable()` guards, `calculateTotal()` with bcmath precision |
+| `OrderItemTest` | 4 | Value object — constructor getters, `getLineTotal()` calculation, bcmath precision (3 × 0.10 = 0.30, no IEEE 754 float errors) |
+
+> **Key Design**: Domain tests extend `PHPUnit\Framework\TestCase` directly — zero Laravel boot, zero I/O. They run in < 1 second.
+
+#### 2. Application Unit Tests (Use Cases with Mocked Repositories)
+
+| Test File | Tests | What It Validates |
+|-----------|-------|------------------|
+| `CreateOrderUseCaseTest` | 6 | Lock acquisition/release lifecycle, stock check + decrement, idempotency key deduplication, `ProcessOrderJob` dispatch, server-side total calculation (bcmath), lock cleanup in `finally` block even on exception |
+| `ProcessOrderUseCaseTest` | 6 | Payment gateway integration, state path PENDING→PROCESSING→PAID, failed payment → FAILED state, idempotency guard (skip non-PENDING), graceful no-op for missing orders, `OrderPaidEvent`/`OrderFailedEvent` dispatch |
+| `CancelOrderUseCaseTest` | 7 | Cancel + stock restore (per item), idempotent re-cancel, `OrderNotCancellableException` for PROCESSING/PAID/FAILED states, `OrderNotFoundException` for missing orders, `OrderCancelledEvent` dispatch |
+
+> **Key Design**: Repositories and external services are Mockery doubles. `Queue::fake()` and `Event::fake()` verify side effects without I/O.
+
+#### 3. Feature Tests (Full HTTP Lifecycle)
+
+| Test File | Tests | What It Validates |
+|-----------|-------|------------------|
+| `OrderLifecycleTest` | 12 | Complete CRUD through HTTP — POST create (201), idempotent duplicate (200), validation errors (422), stock rejection (409), GET show/list with pagination, cancel + stock restore, `X-Trace-Id` propagation |
+| `HealthCheckTest` | 2 | `/api/health` — 200 OK with services connected, 503 degraded when Redis is down (facade mock) |
+| `ConcurrencyTest` | 3 | **Race-condition safety** — see next section |
+
+#### 4. Race Simulation Tests (Concurrency Safety)
+
+The `ConcurrencyTest` class validates the system's **distributed locking and stock integrity** under contention:
+
+| Test | Scenario | Assertion |
+|------|----------|-----------|
+| `it_prevents_overselling_under_concurrent_requests` | 10 simultaneous requests for a product with stock = 1 | Exactly **1 succeeds** (201), **9 rejected** (409), final stock = **0** |
+| `idempotency_key_prevents_duplicate_orders` | 5 simultaneous requests with the same idempotency key | Exactly **1 created** (201), **4 return existing** (200), stock decremented **once** |
+| `concurrent_cancels_are_idempotent` | 5 simultaneous cancel requests on the same order | All return **200**, stock restored **exactly once**, final status = CANCELLED |
+
+> **How It Works**: Requests run sequentially against a shared database with `RefreshDatabase` + `InMemoryDistributedLock`. The lock serializes access the same way Redis `SETNX` would in production. k6 load tests (above) validate the same scenarios at scale with real Redis.
+
+### Running Tests
+
+```bash
+# All tests
+docker compose exec app php artisan test
+
+# Unit tests only (fast — no database)
+docker compose exec app php artisan test --testsuite=Unit
+
+# Feature tests only (requires MySQL + Redis)
+docker compose exec app php artisan test --testsuite=Feature
+
+# With coverage report
+docker compose exec app php artisan test --coverage
+```
+
+### Coverage
+
+| Metric | Value |
+|--------|-------|
+| **Line Coverage** | 76.25% (517 / 678 lines) |
+| **Unit Test Coverage** | Domain + Application layers |
+| **Feature Test Coverage** | HTTP controllers, middleware, jobs, event listeners |
+| **CI Upload** | Both unit and feature coverage uploaded to Codecov with separate flags |
+
+---
+
 ## CI Pipeline
 
 GitHub Actions workflow with **4 parallel jobs**:
