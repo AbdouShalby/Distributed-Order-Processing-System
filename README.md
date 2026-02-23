@@ -2,7 +2,11 @@
 
 > A production-grade distributed order processing system demonstrating **concurrency control**, **distributed locking**, **async payment processing**, and **real-time event broadcasting** — engineered as a backend architecture case study.
 
-[![CI Pipeline](https://github.com/AbdouShalby/distributed-order-processing-system/actions/workflows/ci.yml/badge.svg)](https://github.com/AbdouShalby/distributed-order-processing-system/actions)
+[![CI Pipeline](https://github.com/AbdouShalby/Distributed-Order-Processing-System/actions/workflows/ci.yml/badge.svg)](https://github.com/AbdouShalby/Distributed-Order-Processing-System/actions)
+[![codecov](https://codecov.io/gh/AbdouShalby/Distributed-Order-Processing-System/branch/main/graph/badge.svg)](https://codecov.io/gh/AbdouShalby/Distributed-Order-Processing-System)
+[![Tests](https://img.shields.io/badge/tests-76_passed_(247_assertions)-brightgreen)](https://github.com/AbdouShalby/Distributed-Order-Processing-System/actions)
+[![PHP](https://img.shields.io/badge/PHP-8.4-777BB4?logo=php&logoColor=white)](https://www.php.net/)
+[![Laravel](https://img.shields.io/badge/Laravel-12-FF2D20?logo=laravel&logoColor=white)](https://laravel.com/)
 
 ---
 
@@ -22,8 +26,10 @@
 - [Observability](#observability)
 - [Load Testing](#load-testing)
 - [CI Pipeline](#ci-pipeline)
+- [Environment Configuration](#environment-configuration)
 - [Getting Started](#getting-started)
 - [Project Structure](#project-structure)
+- [Architecture Documentation](#architecture-documentation)
 - [Design Decisions](#design-decisions)
 - [Scaling Strategy](#scaling-strategy)
 - [Future Improvements](#future-improvements)
@@ -410,6 +416,161 @@ curl -X POST http://localhost:8000/api/orders \
 
 **200 OK** (duplicate `idempotency_key`): Returns the existing order — no new order created.
 
+### Get Order
+
+```bash
+curl http://localhost:8000/api/orders/1
+```
+
+**200 OK**:
+```json
+{
+  "data": {
+    "id": 1,
+    "user_id": 1,
+    "status": "PAID",
+    "total_amount": "2029.97",
+    "idempotency_key": "order-abc-123",
+    "cancelled_at": null,
+    "created_at": "2026-02-23T10:30:00Z",
+    "updated_at": "2026-02-23T10:30:05Z",
+    "items": [
+      { "product_id": 1, "quantity": 2, "unit_price": "999.99" },
+      { "product_id": 3, "quantity": 1, "unit_price": "29.99" }
+    ]
+  }
+}
+```
+
+**404 Not Found**:
+```json
+{
+  "message": "Order not found.",
+  "error_code": "NOT_FOUND"
+}
+```
+
+### List Orders (Paginated)
+
+```bash
+curl "http://localhost:8000/api/orders?user_id=1&status=PAID&page=1&per_page=15"
+```
+
+**200 OK**:
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "user_id": 1,
+      "status": "PAID",
+      "total_amount": "2029.97",
+      "idempotency_key": "order-abc-123",
+      "cancelled_at": null,
+      "created_at": "2026-02-23T10:30:00Z",
+      "updated_at": "2026-02-23T10:30:05Z",
+      "items": [
+        { "product_id": 1, "quantity": 2, "unit_price": "999.99" },
+        { "product_id": 3, "quantity": 1, "unit_price": "29.99" }
+      ]
+    }
+  ],
+  "meta": {
+    "current_page": 1,
+    "per_page": 15,
+    "total": 1,
+    "last_page": 1
+  }
+}
+```
+
+Supports filtering by `user_id` and `status`. Pagination: `per_page` default 15, max 50.
+
+### Cancel Order
+
+```bash
+curl -X POST http://localhost:8000/api/orders/1/cancel
+```
+
+**200 OK** (PENDING → CANCELLED):
+```json
+{
+  "data": {
+    "id": 1,
+    "user_id": 1,
+    "status": "CANCELLED",
+    "total_amount": "2029.97",
+    "idempotency_key": "order-abc-123",
+    "cancelled_at": "2026-02-23T10:35:00Z",
+    "created_at": "2026-02-23T10:30:00Z",
+    "updated_at": "2026-02-23T10:35:00Z",
+    "items": [
+      { "product_id": 1, "quantity": 2, "unit_price": "999.99" },
+      { "product_id": 3, "quantity": 1, "unit_price": "29.99" }
+    ]
+  }
+}
+```
+
+- Only `PENDING` orders can be cancelled
+- Stock is restored atomically in a DB transaction
+- Re-cancelling an already cancelled order returns `200 OK` (idempotent)
+
+**422 Not Cancellable** (order is PROCESSING/PAID/FAILED):
+```json
+{
+  "message": "Order with status PAID cannot be cancelled.",
+  "error_code": "INVALID_TRANSITION"
+}
+```
+
+### List Products
+
+```bash
+curl http://localhost:8000/api/products
+```
+
+**200 OK**:
+```json
+{
+  "data": [
+    { "id": 1, "name": "Laptop Pro", "price": "999.99", "stock": 50, "created_at": "2026-02-23T10:00:00Z" },
+    { "id": 2, "name": "Wireless Mouse", "price": "29.99", "stock": 200, "created_at": "2026-02-23T10:00:00Z" },
+    { "id": 3, "name": "USB-C Hub", "price": "49.99", "stock": 100, "created_at": "2026-02-23T10:00:00Z" }
+  ]
+}
+```
+
+### Health Check
+
+```bash
+curl http://localhost:8000/api/health
+```
+
+**200 OK**:
+```json
+{
+  "status": "ok",
+  "services": {
+    "database": "connected",
+    "redis": "connected"
+  },
+  "timestamp": "2026-02-23T10:30:00+00:00"
+}
+```
+
+**503 Service Unavailable** (degraded):
+```json
+{
+  "status": "degraded",
+  "services": {
+    "database": "connected",
+    "redis": "disconnected"
+  },
+  "timestamp": "2026-02-23T10:30:00+00:00"
+}
+```
+
 ### Validation Rules
 
 | Field | Rules |
@@ -431,42 +592,42 @@ curl -X POST http://localhost:8000/api/orders \
 | `404` | `not_found` | Order or resource not found |
 | `429` | `too_many_requests` | Rate limit exceeded (60 req/min) |
 
-### Health Check
+### Error Response Examples
 
-```bash
-curl http://localhost:8000/api/health
-```
-
+**409 Insufficient Stock**:
 ```json
 {
-  "status": "ok",
-  "services": {
-    "database": "connected",
-    "redis": "connected"
+  "message": "Insufficient stock for product ID 5. Requested: 10, available: 3.",
+  "error": "insufficient_stock"
+}
+```
+
+**409 Lock Conflict**:
+```json
+{
+  "message": "Could not acquire lock. Please retry.",
+  "error_code": "LOCK_CONFLICT"
+}
+```
+
+**422 Validation Error**:
+```json
+{
+  "message": "The items field is required.",
+  "errors": {
+    "items": ["The items field is required."],
+    "user_id": ["The user id field is required."]
   }
 }
 ```
 
-Returns `503` with `"status": "degraded"` if any service is down.
-
-### Cancel Order
-
-```bash
-curl -X POST http://localhost:8000/api/orders/1/cancel
+**429 Rate Limited**:
+```json
+{
+  "message": "Too many requests. Please slow down.",
+  "retry_after": 60
+}
 ```
-
-- Only `PENDING` orders can be cancelled
-- Stock is restored atomically in a DB transaction
-- Re-cancelling an already cancelled order returns `200 OK` (idempotent)
-- `PROCESSING`, `PAID`, `FAILED` orders return `422`
-
-### List Orders (Paginated)
-
-```bash
-curl "http://localhost:8000/api/orders?user_id=1&status=PAID&page=1&per_page=15"
-```
-
-Supports filtering by `user_id` and `status`. Pagination: `per_page` default 15, max 50.
 
 ---
 
@@ -568,18 +729,119 @@ Three k6 scenarios in `load-tests/`:
 |------|----------|---------------|
 | `oversell-test.js` | 50 VUs race for `stock=1` | Exactly 1 order succeeds, 49 get `409` |
 | `idempotency-test.js` | 50 VUs with same key | Exactly 1 created (`201`), 49 return existing (`200`) |
-| `high-load-test.js` | Ramp 0→50 VUs over 30s | p95 response time < 500ms under load |
+| `high-load-test.js` | Ramp 0→50 VUs over 2.5min | p95 < 500ms, p99 < 1000ms, success rate > 80% |
+
+### Prerequisites
 
 ```bash
 # Install k6
-brew install k6  # or: sudo apt install k6
+brew install k6           # macOS
+sudo apt install k6       # Debian/Ubuntu
+choco install k6          # Windows
+# Or download: https://k6.io/docs/get-started/installation/
+```
 
-# Run oversell test (product with stock=1)
+### Running the Tests
+
+Make sure containers are running and data is seeded:
+
+```bash
+docker compose up -d
+docker compose exec app php artisan migrate:fresh --seed
+```
+
+#### 1. Oversell Prevention Test
+
+Proves exactly 1 of 50 concurrent orders succeeds when stock = 1:
+
+```bash
 k6 run load-tests/oversell-test.js
+```
 
-# Run with custom base URL
+**Expected Output:**
+```
+══════════════════════════════════════
+  OVERSELL TEST RESULTS
+  Orders Created:  1 (expected: 1)
+  Orders Rejected: 49 (expected: 49)
+  Verdict: PASS ✓
+══════════════════════════════════════
+
+✓ orders_created_total..........: 1   ✓ count==1
+✓ orders_rejected_total.........: 49  ✓ count==49
+```
+
+> **Important**: Reset seed data between runs: `docker compose exec app php artisan migrate:fresh --seed`
+
+#### 2. Idempotency Guarantee Test
+
+Proves duplicate `idempotency_key` never creates a second order:
+
+```bash
+k6 run load-tests/idempotency-test.js
+```
+
+**Expected Output:**
+```
+══════════════════════════════════════
+  IDEMPOTENCY TEST RESULTS
+  Created (201):    1 (expected: 1)
+  Existing (200):   49 (expected: 49)
+  Unexpected:       0 (expected: 0)
+  Verdict: PASS ✓
+══════════════════════════════════════
+
+✓ orders_created_total..........: 1   ✓ count==1
+✓ orders_unexpected_total.......: 0   ✓ count==0
+```
+
+#### 3. High Load / Stress Test
+
+Ramps from 0 to 50 VUs over 2.5 minutes, validates latency thresholds:
+
+```bash
+k6 run load-tests/high-load-test.js
+```
+
+**Expected Output:**
+```
+scenarios: (100.00%) 1 scenario, 50 max VUs, 3m0s max duration
+
+     ✓ status is 201 or 200
+     ✓ response has data.id
+
+     http_req_duration..............: avg=45ms  min=12ms  p(95)=180ms  p(99)=350ms
+   ✓ http_req_duration..............: p(95)<500  p(99)<1000
+   ✓ http_req_failed................: 1.2%   ✓ rate<0.1
+   ✓ order_success_rate.............: 98.8%  ✓ rate>0.8
+     orders_created.................: 847
+     orders_rejected................: 10
+```
+
+#### Custom Base URL
+
+All tests default to `http://localhost:80` (Nginx). Override with:
+
+```bash
 k6 run -e BASE_URL=http://localhost:8000 load-tests/high-load-test.js
 ```
+
+#### Export Results as JSON
+
+```bash
+k6 run --out json=results.json load-tests/high-load-test.js
+```
+
+### Threshold Summary
+
+| Metric | Target | Script |
+|--------|--------|--------|
+| `orders_created_total` | `== 1` | oversell, idempotency |
+| `orders_rejected_total` | `== 49` | oversell |
+| `http_req_duration p(95)` | `< 500ms` | high-load |
+| `http_req_duration p(99)` | `< 1000ms` | high-load |
+| `http_req_failed` | `< 10%` | high-load |
+| `order_success_rate` | `> 80%` | high-load |
 
 ---
 
@@ -605,6 +867,56 @@ GitHub Actions workflow with **4 parallel jobs**:
 | **Docker Build** | All 6 containers build and start successfully | ~60s |
 
 **Total: 76 tests, 247 assertions**
+
+---
+
+## Environment Configuration
+
+The `.env.example` file contains all configuration variables. Copy it to `.env` before first run:
+
+```bash
+cp .env.example .env
+```
+
+### Variable Reference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| **App** | | |
+| `APP_NAME` | `Distributed Order Processing System` | Application name (displayed in logs) |
+| `APP_ENV` | `local` | Environment: `local`, `production`, `testing` |
+| `APP_KEY` | *(empty)* | Encryption key — auto-generated via `php artisan key:generate` |
+| `APP_DEBUG` | `true` | Enable debug mode — **must be `false` in production** |
+| `APP_URL` | `http://localhost:8000` | Base URL for route generation |
+| **Database** | | |
+| `DB_CONNECTION` | `mysql` | Database driver |
+| `DB_HOST` | `mysql` | Database hostname — `mysql` is the Docker service name |
+| `DB_PORT` | `3306` | MySQL port |
+| `DB_DATABASE` | `dops` | Database name (created by Docker automatically) |
+| `DB_USERNAME` | `dops_user` | Database user |
+| `DB_PASSWORD` | `dops_password` | Database password |
+| **Redis** | | |
+| `REDIS_HOST` | `redis` | Redis hostname — `redis` is the Docker service name |
+| `REDIS_PORT` | `6379` | Redis port |
+| `REDIS_PASSWORD` | `null` | Redis password (no auth in development) |
+| **Queue & Broadcast** | | |
+| `QUEUE_CONNECTION` | `redis` | Job queue driver: `redis` (production) or `sync` (testing) |
+| `BROADCAST_CONNECTION` | `reverb` | WebSocket driver |
+| `CACHE_STORE` | `redis` | Cache backend |
+| **Reverb (WebSocket)** | | |
+| `REVERB_APP_ID` | *(empty)* | Reverb application ID |
+| `REVERB_APP_KEY` | *(empty)* | Reverb public key |
+| `REVERB_APP_SECRET` | *(empty)* | Reverb secret key |
+| `REVERB_HOST` | `localhost` | Reverb server host |
+| `REVERB_PORT` | `8080` | Reverb server port |
+
+### Why Secrets Are Not in the Repository
+
+- `APP_KEY` — Laravel encryption key. Committing it exposes all encrypted data. Generated per-environment via `key:generate`.
+- `DB_PASSWORD` — Database credentials. The `.env.example` contains safe defaults for Docker development only.
+- `REVERB_APP_SECRET` — WebSocket authentication. Generated per deployment.
+- All `.env*` files (except `.env.example`) are listed in `.gitignore` to prevent accidental commits.
+- CI pipelines generate ephemeral keys during each run — no secrets stored in workflows.
 
 ---
 
@@ -761,9 +1073,30 @@ make down     # stop all containers
 │
 ├── .github/workflows/ci.yml                # 4-job CI pipeline
 ├── docker-compose.yml                       # 6 services
+├── docs/
+│   └── architecture.md                      # Mermaid diagrams (8 architecture visuals)
 ├── Makefile                                 # setup, test, down shortcuts
 └── README.md                                # You are here
 ```
+
+---
+
+## Architecture Documentation
+
+Detailed Mermaid diagrams are available in [`docs/architecture.md`](docs/architecture.md):
+
+| Diagram | What It Shows |
+|---------|--------------|
+| **System Architecture Overview** | All 6 Docker services and their connections |
+| **Clean Architecture Layers** | Dependency flow: HTTP → Application → Domain ← Infrastructure |
+| **Order Lifecycle State Machine** | PENDING → PROCESSING → PAID/FAILED, PENDING → CANCELLED |
+| **Request Flow (Sequence)** | Full POST /api/orders flow: lock → transaction → dispatch → async payment |
+| **Distributed Locking Strategy** | Two-layer protection: Redis lock + DB FOR UPDATE |
+| **Docker Infrastructure** | Container topology and port mappings |
+| **Database ER Diagram** | users, orders, order_items, products relationships |
+| **Queue & Worker Pipeline** | Job dispatch → worker processing → broadcast flow |
+
+> All diagrams render natively on GitHub. For local viewing, use a Mermaid-compatible editor or [mermaid.live](https://mermaid.live).
 
 ---
 

@@ -72,6 +72,17 @@ jobs:
       - name: Run Unit Tests
         run: php artisan test --testsuite=Unit
 
+      - name: Generate Coverage Report
+        run: php artisan test --testsuite=Unit --coverage-clover=coverage.xml
+
+      - name: Upload Coverage to Codecov
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
   # ─── Feature Tests ──────────────────────────
   feature-tests:
     name: Feature Tests
