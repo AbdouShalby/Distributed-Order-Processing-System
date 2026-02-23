@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\Broadcasting\Events;
 
-use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
@@ -21,11 +21,11 @@ class OrderFailedEvent implements ShouldBroadcast
         public readonly string $failedAt,
     ) {}
 
-    /** @return array<int, Channel> */
+    /** @return array<int, PrivateChannel> */
     public function broadcastOn(): array
     {
         return [
-            new Channel("orders.{$this->userId}"),
+            new PrivateChannel("orders.{$this->userId}"),
         ];
     }
 

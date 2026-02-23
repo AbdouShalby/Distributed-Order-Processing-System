@@ -34,7 +34,10 @@ jobs:
       - name: Install Dependencies
         run: composer install --no-interaction --prefer-dist
 
-      - name: Laravel Lint (Route List)
+      - name: Check Code Style (Laravel Pint)
+        run: ./vendor/bin/pint --test
+
+      - name: Validate Routes
         run: php artisan route:list --json > /dev/null 2>&1 || true
 
   # ─── Unit Tests ──────────────────────────────
@@ -60,6 +63,11 @@ jobs:
 
       - name: Install Dependencies
         run: composer install --no-interaction --prefer-dist
+
+      - name: Prepare Environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
 
       - name: Run Unit Tests
         run: php artisan test --testsuite=Unit

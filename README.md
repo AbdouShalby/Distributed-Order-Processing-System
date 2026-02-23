@@ -599,12 +599,12 @@ GitHub Actions workflow with **4 parallel jobs**:
 
 | Job | What It Validates | Duration |
 |-----|------------------|----------|
-| **Lint** | Dependencies install, routes resolve | ~10s |
-| **Unit Tests** | 39 tests — Order entity, OrderItem VO, OrderStatus state machine | ~7s |
+| **Lint** | Code style (Pint), dependencies, routes resolve | ~15s |
+| **Unit Tests** | 58 tests — Domain entities, state machine, Application use cases (mocked) | ~12s |
 | **Feature Tests** | 18 tests — Full HTTP lifecycle, concurrency, idempotency, health | ~40s |
 | **Docker Build** | All 6 containers build and start successfully | ~60s |
 
-**Total: 57 tests, 158 assertions**
+**Total: 76 tests, 247 assertions**
 
 ---
 
@@ -650,7 +650,7 @@ curl http://localhost:8000/api/orders/1
 
 # Run all tests
 docker compose exec app php artisan test
-# → 57 passed (158 assertions)
+# → 76 passed (247 assertions)
 
 # Stop everything
 docker compose down
@@ -735,10 +735,15 @@ make down     # stop all containers
 │   └── seeders/DatabaseSeeder.php           # 5 products + 2 users
 │
 ├── tests/
-│   ├── Unit/Domain/Order/
-│   │   ├── OrderEntityTest.php              # 22 tests — transitions, totals, precision
-│   │   ├── OrderItemTest.php                # 4 tests — immutability, line totals
-│   │   └── OrderStatusTest.php              # 13 tests — valid/invalid transitions, terminal
+│   ├── Unit/
+│   │   ├── Application/                    # Use case tests with mocked dependencies
+│   │   │   ├── CreateOrderUseCaseTest.php   # 6 tests — success, idempotency, lock fail, stock, precision
+│   │   │   ├── ProcessOrderUseCaseTest.php  # 6 tests — paid, failed, guard, missing, transitions
+│   │   │   └── CancelOrderUseCaseTest.php   # 7 tests — cancel, idempotent, non-cancellable, stock restore
+│   │   └── Domain/Order/
+│   │       ├── OrderEntityTest.php           # 14 tests — transitions, totals, precision
+│   │       ├── OrderItemTest.php             # 4 tests — immutability, line totals
+│   │       └── OrderStatusTest.php           # 20 tests — valid/invalid transitions, terminal
 │   └── Feature/
 │       ├── OrderLifecycleTest.php           # 12 tests — create, show, list, cancel, idempotency
 │       ├── ConcurrencyTest.php              # 3 tests — oversell, idempotency, concurrent cancel

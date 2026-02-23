@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Infrastructure\Locking;
 
 use App\Domain\Inventory\Contracts\DistributedLockInterface;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Str;
 
@@ -45,6 +46,13 @@ class RedisDistributedLock implements DistributedLockInterface
         $sortedIds = array_unique($sortedIds);
 
         $this->acquiredLocks = [];
+        $startTime = microtime(true);
+
+        Log::info('Lock acquisition started', [
+            'event' => 'lock.acquire_start',
+            'product_ids' => $sortedIds,
+            'ttl_seconds' => $ttlSeconds,
+        ]);
 
         foreach ($sortedIds as $productId) {
             $acquired = $this->acquireWithRetry(
@@ -53,6 +61,15 @@ class RedisDistributedLock implements DistributedLockInterface
             );
 
             if (! $acquired) {
+                $elapsed = round((microtime(true) - $startTime) * 1000, 2);
+
+                Log::warning('Lock acquisition failed', [
+                    'event' => 'lock.acquire_failed',
+                    'failed_product_id' => $productId,
+                    'product_ids' => $sortedIds,
+                    'elapsed_ms' => $elapsed,
+                ]);
+
                 // Failed to acquire — release all previously acquired locks
                 $this->releaseAll();
 
@@ -60,15 +77,30 @@ class RedisDistributedLock implements DistributedLockInterface
             }
         }
 
+        $elapsed = round((microtime(true) - $startTime) * 1000, 2);
+
+        Log::info('Lock acquisition succeeded', [
+            'event' => 'lock.acquire_success',
+            'product_ids' => $sortedIds,
+            'elapsed_ms' => $elapsed,
+        ]);
+
         return true;
     }
 
     public function releaseAll(): void
     {
+        $keys = array_keys($this->acquiredLocks);
+
         // Release in reverse order
         foreach (array_reverse($this->acquiredLocks, true) as $key => $token) {
             $this->releaseLock($key, $token);
         }
+
+        Log::info('Locks released', [
+            'event' => 'lock.released',
+            'keys' => $keys,
+        ]);
 
         $this->acquiredLocks = [];
     }
