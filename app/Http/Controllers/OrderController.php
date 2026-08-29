@@ -11,6 +11,7 @@ use App\Application\UseCases\CreateOrder\CreateOrderUseCase;
 use App\Domain\Inventory\Exceptions\InsufficientStockException;
 use App\Domain\Inventory\Exceptions\LockAcquisitionException;
 use App\Domain\Order\Contracts\OrderRepositoryInterface;
+use App\Domain\Order\Exceptions\IdempotencyConflictException;
 use App\Domain\Order\Exceptions\OrderNotCancellableException;
 use App\Domain\Order\Exceptions\OrderNotFoundException;
 use App\Http\Requests\CreateOrderRequest;
@@ -37,21 +38,20 @@ class OrderController extends Controller
                 idempotencyKey: $request->validated('idempotency_key'),
             );
 
-            // Idempotency check at controller level for correct HTTP status code
-            $existingOrder = $this->orderRepository->findByIdempotencyKey($dto->idempotencyKey);
-            if ($existingOrder) {
-                return response()->json(
-                    ['data' => OrderResponseDTO::fromEntity($existingOrder)->toArray()],
-                    200
+            $result = $this->createOrderUseCase->execute($dto);
+
+            return response()
+                ->json(
+                    [
+                        'data' => $result->order->toArray(),
+                        'meta' => ['idempotency_replayed' => ! $result->isCreated()],
+                    ],
+                    $result->isCreated() ? 201 : 200
+                )
+                ->header(
+                    'Idempotency-Replayed',
+                    $result->isCreated() ? 'false' : 'true'
                 );
-            }
-
-            $response = $this->createOrderUseCase->execute($dto);
-
-            return response()->json(
-                ['data' => $response->toArray()],
-                201
-            );
 
         } catch (LockAcquisitionException $e) {
             return response()->json([
@@ -63,6 +63,12 @@ class OrderController extends Controller
             return response()->json([
                 'message' => $e->getMessage(),
                 'error' => 'insufficient_stock',
+            ], 409);
+
+        } catch (IdempotencyConflictException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'error_code' => 'IDEMPOTENCY_CONFLICT',
             ], 409);
 
         } catch (\DomainException $e) {

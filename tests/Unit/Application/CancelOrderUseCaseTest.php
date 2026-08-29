@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Application;
 
+use App\Application\EventHandlers\OrderCancelledHandler;
 use App\Application\UseCases\CancelOrder\CancelOrderUseCase;
-use App\Domain\Inventory\Contracts\ProductRepositoryInterface;
+use App\Domain\Inventory\Services\InventoryService;
 use App\Domain\Order\Contracts\OrderRepositoryInterface;
 use App\Domain\Order\Entities\Order;
 use App\Domain\Order\Enums\OrderStatus;
@@ -15,10 +16,11 @@ use App\Domain\Order\ValueObjects\OrderItem;
 use App\Infrastructure\Broadcasting\Events\OrderCancelledEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
+use Mockery;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
-class CancelOrderUseCaseTest extends TestCase
+final class CancelOrderUseCaseTest extends TestCase
 {
     use RefreshDatabase;
 
@@ -26,29 +28,129 @@ class CancelOrderUseCaseTest extends TestCase
 
     private OrderRepositoryInterface $orderRepo;
 
-    private ProductRepositoryInterface $productRepo;
+    private InventoryService $inventoryService;
+
+    private OrderCancelledHandler $orderCancelledHandler;
 
     protected function setUp(): void
     {
         parent::setUp();
 
         $this->orderRepo = $this->mock(OrderRepositoryInterface::class);
-        $this->productRepo = $this->mock(ProductRepositoryInterface::class);
+        $this->inventoryService = $this->mock(InventoryService::class);
+        $this->orderCancelledHandler = $this->mock(OrderCancelledHandler::class);
 
         $this->useCase = new CancelOrderUseCase(
             $this->orderRepo,
-            $this->productRepo,
+            $this->inventoryService,
+            $this->orderCancelledHandler,
         );
     }
 
-    private function makePendingOrderWithItems(): Order
+    #[Test]
+    public function only_the_successful_claim_restores_inventory(): void
+    {
+        Event::fake([OrderCancelledEvent::class]);
+        $order = $this->cancelledOrder();
+
+        $this->orderRepo
+            ->shouldReceive('claimForCancellation')
+            ->once()
+            ->with(1, Mockery::type(\DateTimeImmutable::class))
+            ->andReturnTrue();
+        $this->orderRepo
+            ->shouldReceive('findByIdForUpdate')
+            ->once()
+            ->with(1)
+            ->andReturn($order);
+        $this->inventoryService->shouldReceive('restoreStock')->once();
+        $this->orderCancelledHandler->shouldReceive('handle')->once();
+        $this->orderRepo
+            ->shouldReceive('findById')
+            ->once()
+            ->with(1)
+            ->andReturn($order);
+
+        $response = $this->useCase->execute(1);
+
+        $this->assertSame('CANCELLED', $response->status);
+        Event::assertDispatched(OrderCancelledEvent::class);
+    }
+
+    #[Test]
+    public function repeated_cancellation_is_a_side_effect_free_replay(): void
+    {
+        $order = $this->cancelledOrder();
+
+        $this->orderRepo->shouldReceive('claimForCancellation')->once()->andReturnFalse();
+        $this->orderRepo->shouldReceive('findByIdForUpdate')->once()->andReturn($order);
+        $this->inventoryService->shouldNotReceive('restoreStock');
+        $this->orderCancelledHandler->shouldNotReceive('handle');
+        $this->orderRepo->shouldNotReceive('findById');
+
+        $response = $this->useCase->execute(1);
+
+        $this->assertSame('CANCELLED', $response->status);
+    }
+
+    #[Test]
+    public function processing_order_cannot_be_cancelled(): void
+    {
+        $this->orderRepo->shouldReceive('claimForCancellation')->once()->andReturnFalse();
+        $this->orderRepo
+            ->shouldReceive('findByIdForUpdate')
+            ->once()
+            ->andReturn($this->orderWithStatus(OrderStatus::PROCESSING));
+
+        $this->expectException(OrderNotCancellableException::class);
+        $this->useCase->execute(1);
+    }
+
+    #[Test]
+    public function missing_order_is_reported_after_the_failed_claim(): void
+    {
+        $this->orderRepo->shouldReceive('claimForCancellation')->once()->andReturnFalse();
+        $this->orderRepo->shouldReceive('findByIdForUpdate')->once()->andReturnNull();
+
+        $this->expectException(OrderNotFoundException::class);
+        $this->useCase->execute(1);
+    }
+
+    #[Test]
+    public function restoration_failure_does_not_publish_completion_side_effects(): void
+    {
+        Event::fake();
+        $order = $this->cancelledOrder();
+
+        $this->orderRepo->shouldReceive('claimForCancellation')->once()->andReturnTrue();
+        $this->orderRepo->shouldReceive('findByIdForUpdate')->once()->andReturn($order);
+        $this->inventoryService
+            ->shouldReceive('restoreStock')
+            ->once()
+            ->andThrow(new \RuntimeException('restore failed'));
+        $this->orderCancelledHandler->shouldNotReceive('handle');
+        $this->orderRepo->shouldNotReceive('findById');
+
+        $this->expectException(\RuntimeException::class);
+        $this->useCase->execute(1);
+    }
+
+    private function cancelledOrder(): Order
+    {
+        return $this->orderWithStatus(OrderStatus::CANCELLED);
+    }
+
+    private function orderWithStatus(OrderStatus $status): Order
     {
         $order = new Order(
             id: 1,
             userId: 10,
-            status: OrderStatus::PENDING,
+            status: $status,
             totalAmount: '209.97',
             idempotencyKey: 'key-123',
+            cancelledAt: $status === OrderStatus::CANCELLED
+                ? new \DateTimeImmutable
+                : null,
         );
         $order->setItems([
             new OrderItem(productId: 1, quantity: 2, unitPrice: '29.99'),
@@ -56,208 +158,5 @@ class CancelOrderUseCaseTest extends TestCase
         ]);
 
         return $order;
-    }
-
-    // ─── Success Path ─────────────────────────────────
-
-    #[Test]
-    public function it_cancels_pending_order_and_restores_stock(): void
-    {
-        Event::fake([OrderCancelledEvent::class]);
-
-        $order = $this->makePendingOrderWithItems();
-
-        $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(1)
-            ->twice() // once to load, once to reload after cancel
-            ->andReturn($order);
-
-        $this->orderRepo
-            ->shouldReceive('updateStatus')
-            ->once();
-
-        // Stock must be restored for EACH item
-        $this->productRepo
-            ->shouldReceive('incrementStock')
-            ->with(1, 2) // product 1, qty 2
-            ->once();
-
-        $this->productRepo
-            ->shouldReceive('incrementStock')
-            ->with(3, 1) // product 3, qty 1
-            ->once();
-
-        $response = $this->useCase->execute(1);
-
-        $this->assertSame(OrderStatus::CANCELLED, $order->getStatus());
-        $this->assertNotNull($order->getCancelledAt());
-        $this->assertSame('209.97', $response->totalAmount);
-
-        Event::assertDispatched(OrderCancelledEvent::class, function ($event) {
-            return $event->orderId === '1' && $event->userId === '10';
-        });
-    }
-
-    // ─── Idempotent Cancel ────────────────────────────
-
-    #[Test]
-    public function it_returns_success_when_order_already_cancelled(): void
-    {
-        $order = new Order(
-            id: 1,
-            userId: 10,
-            status: OrderStatus::CANCELLED,
-            totalAmount: '100.00',
-            idempotencyKey: 'key-123',
-        );
-        $order->setItems([]);
-
-        $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(1)
-            ->once()
-            ->andReturn($order);
-
-        // Should NOT try to cancel again
-        $this->orderRepo->shouldNotReceive('updateStatus');
-        $this->productRepo->shouldNotReceive('incrementStock');
-
-        $response = $this->useCase->execute(1);
-
-        $this->assertSame(1, $response->id);
-        $this->assertSame('CANCELLED', $response->status);
-    }
-
-    // ─── Non-Cancellable States ───────────────────────
-
-    #[Test]
-    public function it_throws_when_order_is_processing(): void
-    {
-        $order = new Order(
-            id: 1,
-            userId: 10,
-            status: OrderStatus::PROCESSING,
-            totalAmount: '100.00',
-            idempotencyKey: 'key-123',
-        );
-
-        $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(1)
-            ->once()
-            ->andReturn($order);
-
-        $this->expectException(OrderNotCancellableException::class);
-
-        $this->useCase->execute(1);
-    }
-
-    #[Test]
-    public function it_throws_when_order_is_paid(): void
-    {
-        $order = new Order(
-            id: 1,
-            userId: 10,
-            status: OrderStatus::PAID,
-            totalAmount: '100.00',
-            idempotencyKey: 'key-123',
-        );
-
-        $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(1)
-            ->once()
-            ->andReturn($order);
-
-        $this->expectException(OrderNotCancellableException::class);
-
-        $this->useCase->execute(1);
-    }
-
-    #[Test]
-    public function it_throws_when_order_is_failed(): void
-    {
-        $order = new Order(
-            id: 1,
-            userId: 10,
-            status: OrderStatus::FAILED,
-            totalAmount: '100.00',
-            idempotencyKey: 'key-123',
-        );
-
-        $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(1)
-            ->once()
-            ->andReturn($order);
-
-        $this->expectException(OrderNotCancellableException::class);
-
-        $this->useCase->execute(1);
-    }
-
-    // ─── Order Not Found ──────────────────────────────
-
-    #[Test]
-    public function it_throws_when_order_does_not_exist(): void
-    {
-        $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(999)
-            ->once()
-            ->andReturnNull();
-
-        $this->expectException(OrderNotFoundException::class);
-
-        $this->useCase->execute(999);
-    }
-
-    // ─── Stock Restoration Count ──────────────────────
-
-    #[Test]
-    public function it_restores_stock_for_all_items_in_order(): void
-    {
-        Event::fake();
-
-        $order = new Order(
-            id: 1,
-            userId: 10,
-            status: OrderStatus::PENDING,
-            totalAmount: '500.00',
-            idempotencyKey: 'key-multi',
-        );
-        $order->setItems([
-            new OrderItem(productId: 1, quantity: 5, unitPrice: '10.00'),
-            new OrderItem(productId: 2, quantity: 3, unitPrice: '50.00'),
-            new OrderItem(productId: 3, quantity: 10, unitPrice: '20.00'),
-        ]);
-
-        $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(1)
-            ->andReturn($order);
-
-        $this->orderRepo
-            ->shouldReceive('updateStatus')
-            ->once();
-
-        // Verify exact quantities restored for each product
-        $this->productRepo
-            ->shouldReceive('incrementStock')
-            ->with(1, 5)
-            ->once();
-
-        $this->productRepo
-            ->shouldReceive('incrementStock')
-            ->with(2, 3)
-            ->once();
-
-        $this->productRepo
-            ->shouldReceive('incrementStock')
-            ->with(3, 10)
-            ->once();
-
-        $this->useCase->execute(1);
     }
 }

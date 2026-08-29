@@ -44,11 +44,12 @@ class ProcessOrderJob implements ShouldQueue
             'attempt' => $this->attempts(),
         ]);
 
-        $useCase->execute($this->orderId);
+        $outcome = $useCase->execute($this->orderId, $this->traceId);
 
         Log::info('ProcessOrderJob completed', [
             'order_id' => $this->orderId,
             'trace_id' => $this->traceId,
+            'outcome' => $outcome->value,
         ]);
     }
 

@@ -99,6 +99,7 @@ class OrderLifecycleTest extends TestCase
         ]);
 
         $response1->assertStatus(201);
+        $response1->assertHeader('Idempotency-Replayed', 'false');
         $orderId = $response1->json('data.id');
 
         // Second request with same key — should return existing order
@@ -111,13 +112,41 @@ class OrderLifecycleTest extends TestCase
         ]);
 
         $response2->assertStatus(200)
-            ->assertJsonPath('data.id', $orderId);
+            ->assertHeader('Idempotency-Replayed', 'true')
+            ->assertJsonPath('data.id', $orderId)
+            ->assertJsonPath('meta.idempotency_replayed', true);
 
         // Stock should only be decremented once
         $this->assertDatabaseHas('products', [
             'id' => 2,
             'stock' => 199, // was 200, decremented only once
         ]);
+    }
+
+    #[\PHPUnit\Framework\Attributes\Test]
+    public function it_rejects_reuse_of_an_idempotency_key_with_different_parameters(): void
+    {
+        Queue::fake();
+
+        $this->postJson('/api/orders', [
+            'user_id' => 1,
+            'idempotency_key' => 'conflicting-key',
+            'items' => [
+                ['product_id' => 1, 'quantity' => 1],
+            ],
+        ])->assertStatus(201);
+
+        $this->postJson('/api/orders', [
+            'user_id' => 1,
+            'idempotency_key' => 'conflicting-key',
+            'items' => [
+                ['product_id' => 1, 'quantity' => 2],
+            ],
+        ])->assertStatus(409)
+            ->assertJsonPath('error_code', 'IDEMPOTENCY_CONFLICT');
+
+        $this->assertDatabaseCount('orders', 1);
+        $this->assertDatabaseHas('products', ['id' => 1, 'stock' => 49]);
     }
 
     #[\PHPUnit\Framework\Attributes\Test]

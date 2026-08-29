@@ -6,11 +6,13 @@ namespace App\Providers;
 
 use App\Domain\Inventory\Contracts\DistributedLockInterface;
 use App\Domain\Inventory\Contracts\ProductRepositoryInterface;
+use App\Domain\Order\Contracts\IdempotencyRepositoryInterface;
 use App\Domain\Order\Contracts\OrderRepositoryInterface;
 use App\Domain\Payment\Contracts\PaymentGatewayInterface;
 use App\Infrastructure\Locking\InMemoryDistributedLock;
 use App\Infrastructure\Locking\RedisDistributedLock;
 use App\Infrastructure\PaymentGateway\SimulatedPaymentGateway;
+use App\Infrastructure\Persistence\Repositories\EloquentIdempotencyRepository;
 use App\Infrastructure\Persistence\Repositories\EloquentOrderRepository;
 use App\Infrastructure\Persistence\Repositories\EloquentProductRepository;
 use Illuminate\Support\ServiceProvider;
@@ -24,6 +26,7 @@ class DomainServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(OrderRepositoryInterface::class, EloquentOrderRepository::class);
+        $this->app->bind(IdempotencyRepositoryInterface::class, EloquentIdempotencyRepository::class);
         $this->app->bind(ProductRepositoryInterface::class, EloquentProductRepository::class);
         $this->app->bind(PaymentGatewayInterface::class, SimulatedPaymentGateway::class);
 

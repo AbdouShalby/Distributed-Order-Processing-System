@@ -19,6 +19,7 @@ class Order
         private OrderStatus $status,
         private string $totalAmount,
         private string $idempotencyKey,
+        private ?string $requestFingerprint = null,
         private ?\DateTimeImmutable $cancelledAt = null,
         private ?\DateTimeImmutable $createdAt = null,
         private ?\DateTimeImmutable $updatedAt = null,
@@ -49,6 +50,11 @@ class Order
     public function getIdempotencyKey(): string
     {
         return $this->idempotencyKey;
+    }
+
+    public function getRequestFingerprint(): ?string
+    {
+        return $this->requestFingerprint;
     }
 
     public function getCancelledAt(): ?\DateTimeImmutable
