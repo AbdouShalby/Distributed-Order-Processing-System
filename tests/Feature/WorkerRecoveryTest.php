@@ -6,11 +6,13 @@ namespace Tests\Feature;
 
 use App\Application\UseCases\ProcessOrder\ProcessOrderOutcome;
 use App\Application\UseCases\ProcessOrder\ProcessOrderUseCase;
+use App\Application\UseCases\ProcessOrder\RecoverExpiredProcessingOrdersUseCase;
 use App\Domain\Order\Contracts\OrderRepositoryInterface;
 use App\Domain\Payment\Exceptions\PaymentGatewayUnavailableException;
 use App\Domain\Payment\Exceptions\PaymentOutcomeUnknownException;
 use App\Infrastructure\Broadcasting\Events\OrderFailedEvent;
 use App\Infrastructure\Broadcasting\Events\OrderPaidEvent;
+use App\Infrastructure\Queue\Jobs\ProcessOrderJob;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -155,6 +157,41 @@ final class WorkerRecoveryTest extends TestCase
             'request_count' => 1,
             'side_effect_count' => 1,
         ]);
+    }
+
+    #[Test]
+    public function expired_processing_leases_are_requeued_by_the_recovery_sweep(): void
+    {
+        $expiredOrderId = $this->createPendingOrder('worker-expired-sweep');
+        $liveOrderId = $this->createPendingOrder('worker-live-sweep');
+        $repository = app(OrderRepositoryInterface::class);
+        $now = new \DateTimeImmutable;
+
+        $repository->claimForProcessing(
+            $expiredOrderId,
+            $now->modify('-2 minutes'),
+            $now->modify('-1 minute'),
+            'expired-sweep-token'
+        );
+        $repository->claimForProcessing(
+            $liveOrderId,
+            $now,
+            $now->modify('+1 minute'),
+            'live-sweep-token'
+        );
+        Queue::fake();
+
+        $count = app(RecoverExpiredProcessingOrdersUseCase::class)->execute();
+
+        $this->assertSame(1, $count);
+        Queue::assertPushed(
+            ProcessOrderJob::class,
+            fn (ProcessOrderJob $job) => $job->orderId === $expiredOrderId
+        );
+        Queue::assertNotPushed(
+            ProcessOrderJob::class,
+            fn (ProcessOrderJob $job) => $job->orderId === $liveOrderId
+        );
     }
 
     private function createPendingOrder(string $idempotencyKey): int

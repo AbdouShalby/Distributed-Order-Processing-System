@@ -39,6 +39,14 @@ interface OrderRepositoryInterface
         \DateTimeImmutable $expiredAt
     ): bool;
 
+    /** @return int[] */
+    public function findRecoverableProcessingIds(
+        \DateTimeImmutable $asOf,
+        int $limit
+    ): array;
+
+    public function markLegacyProcessingSafeToRecover(int $orderId): bool;
+
     public function claimForCancellation(
         int $orderId,
         \DateTimeImmutable $cancelledAt

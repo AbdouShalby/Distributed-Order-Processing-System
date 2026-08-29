@@ -99,6 +99,19 @@ class EloquentOrderRepository implements OrderRepositoryInterface
                             ->where('processing_lease_until', '<=', $claimedAt)
                             ->where('processing_attempt', '>', 0)
                             ->whereNotNull('payment_idempotency_key');
+                    })
+                    ->orWhere(function ($approvedLegacy) {
+                        $approvedLegacy
+                            ->where('status', OrderStatus::PROCESSING->value)
+                            ->where(
+                                'processing_recovery_state',
+                                ProcessingRecoveryState::SAFE_TO_RECOVER->value
+                            )
+                            ->whereNull('processing_token')
+                            ->whereNull('processing_claimed_at')
+                            ->whereNull('processing_lease_until')
+                            ->where('processing_attempt', 0)
+                            ->whereNull('payment_idempotency_key');
                     });
             })
             ->update([
@@ -162,6 +175,62 @@ class EloquentOrderRepository implements OrderRepositoryInterface
             ->update([
                 'processing_lease_until' => $expiredAt,
                 'updated_at' => $expiredAt,
+            ]) === 1;
+    }
+
+    public function findRecoverableProcessingIds(
+        \DateTimeImmutable $asOf,
+        int $limit
+    ): array {
+        return OrderModel::query()
+            ->where('status', OrderStatus::PROCESSING->value)
+            ->where(function ($recoverable) use ($asOf) {
+                $recoverable->where(function ($expired) use ($asOf) {
+                    $expired->where(
+                        'processing_recovery_state',
+                        ProcessingRecoveryState::LEASED->value
+                    )
+                        ->whereNotNull('processing_token')
+                        ->whereNotNull('processing_claimed_at')
+                        ->whereNotNull('processing_lease_until')
+                        ->where('processing_lease_until', '<=', $asOf)
+                        ->where('processing_attempt', '>', 0)
+                        ->whereNotNull('payment_idempotency_key');
+                })->orWhere(function ($approvedLegacy) {
+                    $approvedLegacy->where(
+                        'processing_recovery_state',
+                        ProcessingRecoveryState::SAFE_TO_RECOVER->value
+                    )
+                        ->whereNull('processing_token')
+                        ->whereNull('processing_claimed_at')
+                        ->whereNull('processing_lease_until')
+                        ->where('processing_attempt', 0)
+                        ->whereNull('payment_idempotency_key');
+                });
+            })
+            ->orderBy('id')
+            ->limit(max(1, $limit))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+    }
+
+    public function markLegacyProcessingSafeToRecover(int $orderId): bool
+    {
+        return OrderModel::whereKey($orderId)
+            ->where('status', OrderStatus::PROCESSING->value)
+            ->where(
+                'processing_recovery_state',
+                ProcessingRecoveryState::RECONCILIATION_REQUIRED->value
+            )
+            ->whereNull('processing_token')
+            ->whereNull('processing_claimed_at')
+            ->whereNull('processing_lease_until')
+            ->where('processing_attempt', 0)
+            ->whereNull('payment_idempotency_key')
+            ->update([
+                'processing_recovery_state' => ProcessingRecoveryState::SAFE_TO_RECOVER->value,
+                'updated_at' => now(),
             ]) === 1;
     }
 

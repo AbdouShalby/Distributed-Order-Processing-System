@@ -63,6 +63,31 @@ services:
       - REDIS_HOST=redis
     networks:
       - dops-network
+  # ===========================================
+  # Scheduler - Scheduled Recovery Process
+  # ===========================================
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: dops-scheduler
+    user: "1000:1000"
+    command: ["php", "/var/www/artisan", "schedule:work"]
+    restart: unless-stopped
+    volumes:
+      - ./:/var/www
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - APP_ENV=local
+      - DB_HOST=mysql
+      - REDIS_HOST=redis
+      - LOG_CHANNEL=stderr
+    networks:
+      - dops-network
 
   # ===========================================
   # MySQL - Primary Database
