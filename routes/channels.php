@@ -8,7 +8,8 @@ Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
 
 /**
  * Private channel for order status updates.
- * Users can only listen to their own orders.
+ * The callback restricts an authenticated user to the matching user ID.
+ * End-to-end API/broadcast authentication is outside the current showcase.
  */
 Broadcast::channel('orders.{userId}', function ($user, $userId) {
     return (int) $user->id === (int) $userId;

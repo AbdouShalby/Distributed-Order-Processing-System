@@ -27,6 +27,7 @@ services:
     user: "1000:1000"
     volumes:
       - ./:/var/www
+      - vendor-data:/var/www/vendor
     depends_on:
       mysql:
         condition: service_healthy
@@ -36,6 +37,10 @@ services:
       - APP_ENV=local
       - DB_HOST=mysql
       - REDIS_HOST=redis
+      - REVERB_HOST=reverb
+      - REVERB_APP_ID=${REVERB_APP_ID:-dops-local}
+      - REVERB_APP_KEY=${REVERB_APP_KEY:-dops-local-key}
+      - REVERB_APP_SECRET=${REVERB_APP_SECRET:-dops-local-secret}
     networks:
       - dops-network
 
@@ -51,6 +56,7 @@ services:
     command: supervisord -c /etc/supervisor/conf.d/worker.conf
     volumes:
       - ./:/var/www
+      - vendor-data:/var/www/vendor
       - ./docker/supervisor/worker.conf:/etc/supervisor/conf.d/worker.conf
     depends_on:
       mysql:
@@ -61,8 +67,13 @@ services:
       - APP_ENV=local
       - DB_HOST=mysql
       - REDIS_HOST=redis
+      - REVERB_HOST=reverb
+      - REVERB_APP_ID=${REVERB_APP_ID:-dops-local}
+      - REVERB_APP_KEY=${REVERB_APP_KEY:-dops-local-key}
+      - REVERB_APP_SECRET=${REVERB_APP_SECRET:-dops-local-secret}
     networks:
       - dops-network
+
   # ===========================================
   # Scheduler - Scheduled Recovery Process
   # ===========================================
@@ -76,6 +87,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./:/var/www
+      - vendor-data:/var/www/vendor
     depends_on:
       mysql:
         condition: service_healthy
@@ -145,6 +157,7 @@ services:
       - "8080:8080"
     volumes:
       - ./:/var/www
+      - vendor-data:/var/www/vendor
     depends_on:
       redis:
         condition: service_healthy
@@ -152,10 +165,16 @@ services:
       - APP_ENV=local
       - DB_HOST=mysql
       - REDIS_HOST=redis
+      - REVERB_HOST=reverb
+      - REVERB_APP_ID=${REVERB_APP_ID:-dops-local}
+      - REVERB_APP_KEY=${REVERB_APP_KEY:-dops-local-key}
+      - REVERB_APP_SECRET=${REVERB_APP_SECRET:-dops-local-secret}
     networks:
       - dops-network
 
 volumes:
+  vendor-data:
+    driver: local
   mysql-data:
     driver: local
   redis-data:

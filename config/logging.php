@@ -71,7 +71,7 @@ return [
         | Structured JSON Log Channel
         |----------------------------------------------------------------------
         |
-        | Production-ready structured logging with JSON output.
+        | Production-inspired structured logging with JSON output.
         | Each line is a valid JSON object for log aggregation systems
         | (ELK, Datadog, CloudWatch, etc).
         |
