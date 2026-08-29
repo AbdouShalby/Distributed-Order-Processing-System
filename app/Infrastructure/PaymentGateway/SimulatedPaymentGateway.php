@@ -10,6 +10,7 @@ use App\Domain\Payment\Exceptions\PaymentOutcomeUnknownException;
 use App\Domain\Payment\ValueObjects\PaymentResult;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Redis;
 
 /**
  * Simulated payment gateway.
@@ -80,6 +81,12 @@ class SimulatedPaymentGateway implements PaymentGatewayInterface
             'event' => $inserted ? 'payment.accepted' : 'payment.replayed',
         ]);
 
+        $this->pauseAtIntegrationCrashBarrier(
+            $orderId,
+            $providerIdempotencyKey,
+            $operation
+        );
+
         if ($inserted && config('services.simulated_payment.timeout_after_persist')) {
             throw new PaymentOutcomeUnknownException(
                 'Simulated provider timed out after accepting the payment; outcome is unknown to the caller.'
@@ -89,5 +96,47 @@ class SimulatedPaymentGateway implements PaymentGatewayInterface
         return $operation->status === 'SUCCEEDED'
             ? PaymentResult::successful()
             : PaymentResult::failed($operation->message);
+    }
+
+    /**
+     * Test-only synchronization seam for the simulated provider. The fixture
+     * pauses after its durable ledger write and before returning to the order
+     * use case, allowing an independent process to terminate the worker at the
+     * exact crash boundary. Normal runtime configuration leaves this disabled.
+     */
+    private function pauseAtIntegrationCrashBarrier(
+        int $orderId,
+        string $providerIdempotencyKey,
+        object $operation
+    ): void {
+        $barrier = config('services.simulated_payment.after_persist_barrier');
+
+        if (! is_string($barrier) || $barrier === '') {
+            return;
+        }
+
+        Redis::set(
+            "{$barrier}:provider-persisted",
+            json_encode([
+                'order_id' => $orderId,
+                'provider_identity' => $providerIdempotencyKey,
+                'provider_status' => $operation->status,
+                'request_count' => (int) $operation->request_count,
+                'side_effect_count' => (int) $operation->side_effect_count,
+            ], JSON_THROW_ON_ERROR),
+            'EX',
+            30
+        );
+
+        $deadline = microtime(true) + 20;
+        while (Redis::get("{$barrier}:provider-release") !== 'go') {
+            if (microtime(true) >= $deadline) {
+                throw new \RuntimeException(
+                    'Integration crash controller did not terminate or release the worker.'
+                );
+            }
+
+            usleep(5_000);
+        }
     }
 }
