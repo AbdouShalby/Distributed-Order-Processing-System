@@ -11,6 +11,7 @@ enum OrderStatus: string
     case PAID = 'PAID';
     case FAILED = 'FAILED';
     case CANCELLED = 'CANCELLED';
+    case REFUNDED = 'REFUNDED';
 
     /**
      * Check if transition to a new status is allowed.
@@ -20,7 +21,8 @@ enum OrderStatus: string
         return match ($this) {
             self::PENDING => in_array($newStatus, [self::PROCESSING, self::CANCELLED]),
             self::PROCESSING => in_array($newStatus, [self::PAID, self::FAILED]),
-            self::PAID, self::FAILED, self::CANCELLED => false,
+            self::PAID => $newStatus === self::REFUNDED,
+            self::FAILED, self::CANCELLED, self::REFUNDED => false,
         };
     }
 
@@ -29,6 +31,6 @@ enum OrderStatus: string
      */
     public function isTerminal(): bool
     {
-        return in_array($this, [self::PAID, self::FAILED, self::CANCELLED]);
+        return in_array($this, [self::FAILED, self::CANCELLED, self::REFUNDED]);
     }
 }

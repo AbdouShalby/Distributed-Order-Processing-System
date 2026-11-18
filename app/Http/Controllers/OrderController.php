@@ -105,7 +105,7 @@ class OrderController extends Controller
     {
         $request->validate([
             'user_id' => ['required', 'integer'],
-            'status' => ['nullable', 'string', 'in:PENDING,PROCESSING,PAID,FAILED,CANCELLED'],
+            'status' => ['nullable', 'string', 'in:PENDING,PROCESSING,PAID,FAILED,CANCELLED,REFUNDED'],
             'page' => ['nullable', 'integer', 'min:1'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:50'],
         ]);

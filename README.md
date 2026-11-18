@@ -284,8 +284,9 @@ Mermaid ER diagram in [`docs/architecture.md`](docs/architecture.md).
 | `PENDING` | `CANCELLED` | User cancel API | Stock restored atomically |
 | `PROCESSING` | `PAID` | Payment succeeds (80%) | Broadcast `OrderPaid` |
 | `PROCESSING` | `FAILED` | Payment fails (20%) | Broadcast `OrderFailed` |
+| `PAID` | `REFUNDED` | Refunds reach the paid total | — |
 
-**Terminal States**: `PAID`, `FAILED`, `CANCELLED` — no further transitions allowed.
+**Terminal States**: `FAILED`, `CANCELLED`, `REFUNDED` — no further transitions allowed. `PAID` accepts refunds until fully refunded.
 
 ### State Machine Implementation
 
