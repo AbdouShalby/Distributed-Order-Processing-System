@@ -16,7 +16,7 @@ exactly-once claim.
 
 ## Demo video
 
-<!-- VIDEO: GitHub user-attachments URL goes here -->
+https://github.com/user-attachments/assets/4548fc59-e90c-4a06-9f4b-838f92e5f6b0
 
 A narrated walkthrough of about 100 seconds: the architecture, the two stock locks, durable idempotency, the payment state machine, a real k6 run, the tests and CI.
 
