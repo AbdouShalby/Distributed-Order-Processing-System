@@ -13,10 +13,10 @@ use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
-use Symfony\Component\HttpKernel\Exception\ThrottleRequestsException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -47,7 +47,7 @@ return Application::configure(basePath: dirname(__DIR__))
                     'message' => 'Too many requests. Please slow down.',
                     'error_code' => 'RATE_LIMIT_EXCEEDED',
                     'retry_after' => $e->getHeaders()['Retry-After'] ?? null,
-                ], 429);
+                ], 429, $e->getHeaders());
             }
         });
 
