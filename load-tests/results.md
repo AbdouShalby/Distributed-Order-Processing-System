@@ -64,7 +64,7 @@ same time.
 
 ## Refund race test (`refund-race-test.js`)
 
-Run on 2026-11-18 against commit `0c8607d` (branch `feature/refunds-api`), same
+Run on 2026-11-18 against commit `f5e8579` (branch `feature/refunds-api`, final refund code; an earlier run on `0c8607d` gave the same result), same
 local Docker setup and `grafana/k6:1.0.0`. Reset: `migrate:fresh --seed`, then
 `db:seed --class=RefundDemoSeeder` (one `PAID` order of `100.00`), then
 `redis-cli FLUSHALL`. 50 virtual users each request a `needs_approval` refund
