@@ -11,6 +11,15 @@ interface RefundRepositoryInterface
     public function findByKey(string $key): ?Refund;
 
     /**
+     * Read-only, newest first; does not acquire row locks.
+     *
+     * @return list<Refund>
+     */
+    public function forOrder(int $orderId): array;
+
+    public function findForCustomer(int $refundId, int $customerId): ?Refund;
+
+    /**
      * Callers must already hold the order row lock in their transaction.
      *
      * @return list<Refund>

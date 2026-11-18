@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Agent\AgentOrderController;
+use App\Http\Controllers\Agent\AgentRefundController;
 use App\Http\Controllers\HealthController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\ProductController;
@@ -34,5 +35,8 @@ Route::prefix('agent')
         Route::middleware(ValidateCustomerHeader::class)->group(function (): void {
             Route::get('/orders', [AgentOrderController::class, 'index']);
             Route::get('/orders/{id}', [AgentOrderController::class, 'show'])->whereNumber('id');
+            Route::post('/orders/{id}/refunds', [AgentRefundController::class, 'store'])->whereNumber('id');
+            Route::get('/orders/{id}/refunds', [AgentRefundController::class, 'indexForOrder'])->whereNumber('id');
+            Route::get('/refunds/{id}', [AgentRefundController::class, 'show'])->whereNumber('id');
         });
     });

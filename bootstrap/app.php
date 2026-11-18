@@ -7,6 +7,8 @@ use App\Domain\Inventory\Exceptions\LockAcquisitionException;
 use App\Domain\Order\Exceptions\InvalidOrderTransitionException;
 use App\Domain\Order\Exceptions\OrderNotCancellableException;
 use App\Domain\Order\Exceptions\OrderNotFoundException;
+use App\Domain\Refund\Exceptions\OrderNotRefundableException;
+use App\Domain\Refund\Exceptions\RefundExceedsPaidException;
 use App\Http\Middleware\RequireServiceToken;
 use App\Http\Middleware\TraceIdMiddleware;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -103,6 +105,24 @@ return Application::configure(basePath: dirname(__DIR__))
                     'message' => $e->getMessage(),
                     'error_code' => 'VALIDATION_ERROR',
                     'errors' => $e->errors(),
+                ], 422);
+            }
+        });
+
+        $exceptions->render(function (OrderNotRefundableException $e, Request $request) {
+            if ($request->expectsJson() || $request->is('api/*')) {
+                return response()->json([
+                    'message' => $e->getMessage(),
+                    'error_code' => 'ORDER_NOT_REFUNDABLE',
+                ], 422);
+            }
+        });
+
+        $exceptions->render(function (RefundExceedsPaidException $e, Request $request) {
+            if ($request->expectsJson() || $request->is('api/*')) {
+                return response()->json([
+                    'message' => $e->getMessage(),
+                    'error_code' => 'REFUND_EXCEEDS_PAID',
                 ], 422);
             }
         });

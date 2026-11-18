@@ -20,6 +20,21 @@ final class EloquentRefundRepository implements RefundRepositoryInterface
         return Refund::query()->where('order_id', $orderId)->lockForUpdate()->get()->all();
     }
 
+    public function forOrder(int $orderId): array
+    {
+        return Refund::query()
+            ->where('order_id', $orderId)
+            ->latest()
+            ->orderByDesc('id')
+            ->get()
+            ->all();
+    }
+
+    public function findForCustomer(int $refundId, int $customerId): ?Refund
+    {
+        return Refund::query()->whereKey($refundId)->where('customer_id', $customerId)->first();
+    }
+
     public function create(array $attributes): Refund
     {
         return Refund::query()->create($attributes);

@@ -54,6 +54,8 @@ interface OrderRepositoryInterface
 
     public function findByIdForUpdate(int $id): ?Order;
 
+    public function markRefundedIfPaid(int $orderId): bool;
+
     /**
      * Must be called inside a transaction and must be the first query of any refund transaction.
      */

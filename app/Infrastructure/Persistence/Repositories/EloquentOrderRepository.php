@@ -255,6 +255,16 @@ class EloquentOrderRepository implements OrderRepositoryInterface
         return $model ? OrderMapper::toEntity($model) : null;
     }
 
+    public function markRefundedIfPaid(int $orderId): bool
+    {
+        return OrderModel::whereKey($orderId)
+            ->where('status', OrderStatus::PAID->value)
+            ->update([
+                'status' => OrderStatus::REFUNDED->value,
+                'updated_at' => now(),
+            ]) === 1;
+    }
+
     /**
      * Must be called inside a transaction and must be the first query of any refund transaction.
      */
