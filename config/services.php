@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 return [
 
     /*
@@ -33,6 +35,15 @@ return [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
+    ],
+
+    'agent' => [
+        'token' => env('AGENT_SERVICE_TOKEN', ''),
+        'rate_limit_per_minute' => (int) env('AGENT_RATE_LIMIT_PER_MINUTE', 600),
+    ],
+
+    'refunds' => [
+        'auto_approve_limit' => env('REFUND_AUTO_APPROVE_LIMIT', '50.00'),
     ],
 
     'simulated_payment' => [

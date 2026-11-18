@@ -1,15 +1,21 @@
 <?php
 
+declare(strict_types=1);
+
 use App\Domain\Inventory\Exceptions\InsufficientStockException;
 use App\Domain\Inventory\Exceptions\LockAcquisitionException;
 use App\Domain\Order\Exceptions\InvalidOrderTransitionException;
 use App\Domain\Order\Exceptions\OrderNotCancellableException;
 use App\Domain\Order\Exceptions\OrderNotFoundException;
+use App\Http\Middleware\RequireServiceToken;
 use App\Http\Middleware\TraceIdMiddleware;
+use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\ThrottleRequestsException;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -26,6 +32,12 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
 
         $middleware->throttleApi('60,1'); // 60 requests per minute
+        $middleware->alias(['service.token' => RequireServiceToken::class]);
+        $middleware->prependToPriorityList(\Illuminate\Routing\Middleware\ThrottleRequests::class, RequireServiceToken::class);
+    })
+    ->booted(function (): void {
+        RateLimiter::for('agent', fn (Request $request) => Limit::perMinute(config('services.agent.rate_limit_per_minute'))
+            ->by(hash('sha256', $request->header('X-Service-Token', ''))));
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // ─── Custom 429 Rate Limit Response ─────────────────
@@ -81,6 +93,16 @@ return Application::configure(basePath: dirname(__DIR__))
                 return response()->json([
                     'message' => $e->getMessage(),
                     'error_code' => 'INVALID_TRANSITION',
+                ], 422);
+            }
+        });
+
+        $exceptions->render(function (ValidationException $e, Request $request) {
+            if ($request->is('api/agent/*')) {
+                return response()->json([
+                    'message' => $e->getMessage(),
+                    'error_code' => 'VALIDATION_ERROR',
+                    'errors' => $e->errors(),
                 ], 422);
             }
         });

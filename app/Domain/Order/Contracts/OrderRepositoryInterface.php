@@ -55,6 +55,18 @@ interface OrderRepositoryInterface
     public function findByIdForUpdate(int $id): ?Order;
 
     /**
+     * Must be called inside a transaction and must be the first query of any refund transaction.
+     */
+    public function lockForCustomer(int $orderId, int $customerId): ?Order;
+
+    /**
+     * Read-only, newest first; does not acquire row locks.
+     *
+     * @return Order[]
+     */
+    public function listForCustomer(int $customerId, int $limit): array;
+
+    /**
      * @return Order[]
      */
     public function findByUserId(int $userId, ?string $status = null, int $page = 1, int $perPage = 15): array;
