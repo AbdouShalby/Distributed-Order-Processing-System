@@ -9,6 +9,7 @@ use App\Domain\Order\Exceptions\OrderNotCancellableException;
 use App\Domain\Order\Exceptions\OrderNotFoundException;
 use App\Domain\Refund\Exceptions\OrderNotRefundableException;
 use App\Domain\Refund\Exceptions\RefundExceedsPaidException;
+use App\Domain\Refund\Exceptions\RefundNotPendingApprovalException;
 use App\Http\Middleware\RequireServiceToken;
 use App\Http\Middleware\TraceIdMiddleware;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -124,6 +125,15 @@ return Application::configure(basePath: dirname(__DIR__))
                     'message' => $e->getMessage(),
                     'error_code' => 'REFUND_EXCEEDS_PAID',
                 ], 422);
+            }
+        });
+
+        $exceptions->render(function (RefundNotPendingApprovalException $e, Request $request) {
+            if ($request->expectsJson() || $request->is('api/*')) {
+                return response()->json([
+                    'message' => $e->getMessage(),
+                    'error_code' => 'REFUND_NOT_PENDING_APPROVAL',
+                ], 409);
             }
         });
 

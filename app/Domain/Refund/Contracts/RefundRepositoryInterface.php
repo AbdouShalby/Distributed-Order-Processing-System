@@ -33,6 +33,8 @@ interface RefundRepositoryInterface
 
     public function lockById(int $id): ?Refund;
 
+    public function orderIdOf(int $refundId): ?int;
+
     public function save(Refund $refund): void;
 
     /**

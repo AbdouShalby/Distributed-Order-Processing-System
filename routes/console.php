@@ -1,8 +1,13 @@
 <?php
 
+declare(strict_types=1);
+
+use App\Application\UseCases\ExecuteRefund\ExecuteRefundUseCase;
 use App\Application\UseCases\ProcessOrder\ApproveLegacyProcessingRetryUseCase;
 use App\Application\UseCases\ProcessOrder\RecoverExpiredProcessingOrdersUseCase;
 use App\Domain\Order\Enums\ProcessingRecoveryState;
+use App\Domain\Refund\RefundStatus;
+use App\Models\Refund;
 use Illuminate\Console\Command;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -78,6 +83,23 @@ Artisan::command(
         return Command::SUCCESS;
     }
 )->purpose('Allow retry only after confirming the historical payment never started');
+
+Artisan::command('refunds:reconcile {refundId}', function () {
+    $refund = Refund::query()->find((int) $this->argument('refundId'));
+    if ($refund === null) {
+        $this->error('Refund not found.');
+
+        return Command::FAILURE;
+    }
+
+    if ($refund->status === RefundStatus::PENDING) {
+        $refund = app(ExecuteRefundUseCase::class)->execute($refund->id);
+    }
+
+    $this->info($refund->status->value);
+
+    return Command::SUCCESS;
+})->purpose('Reconcile a pending refund using its stored provider idempotency key');
 
 Schedule::command('orders:recover-expired --limit=100')
     ->everyMinute()

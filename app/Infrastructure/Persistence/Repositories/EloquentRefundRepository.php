@@ -50,6 +50,13 @@ final class EloquentRefundRepository implements RefundRepositoryInterface
         $refund->save();
     }
 
+    public function orderIdOf(int $refundId): ?int
+    {
+        $orderId = Refund::query()->whereKey($refundId)->value('order_id');
+
+        return $orderId === null ? null : (int) $orderId;
+    }
+
     public function pendingApproval(int $limit): array
     {
         return Refund::query()

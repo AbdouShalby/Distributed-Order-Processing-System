@@ -32,6 +32,11 @@ Route::prefix('agent')
     ->withoutMiddleware('throttle:60,1')
     ->middleware(['service.token', 'throttle:agent'])
     ->group(function (): void {
+        Route::post('/refunds/{id}/approve', [AgentRefundController::class, 'approve'])->whereNumber('id');
+        Route::post('/refunds/{id}/reject', [AgentRefundController::class, 'reject'])->whereNumber('id');
+        Route::get('/refunds', [AgentRefundController::class, 'queue']);
+        Route::get('/customers/{customerId}/refunds', [AgentRefundController::class, 'forCustomer']);
+
         Route::middleware(ValidateCustomerHeader::class)->group(function (): void {
             Route::get('/orders', [AgentOrderController::class, 'index']);
             Route::get('/orders/{id}', [AgentOrderController::class, 'show'])->whereNumber('id');
