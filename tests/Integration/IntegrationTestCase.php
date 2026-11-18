@@ -46,6 +46,7 @@ abstract class IntegrationTestCase extends TestCase
         Redis::flushdb();
         DB::statement('SET FOREIGN_KEY_CHECKS=0');
         foreach ([
+            'refunds',
             'simulated_payment_operations',
             'idempotency_requests',
             'order_items',

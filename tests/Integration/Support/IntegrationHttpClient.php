@@ -7,26 +7,30 @@ namespace Tests\Integration\Support;
 final class IntegrationHttpClient
 {
     /**
+     * @param  array<string, string>  $headers
      * @return array{status: int, body: array<string, mixed>}
      */
-    public static function request(string $method, string $path, ?array $body = null): array
+    public static function request(string $method, string $path, ?array $body = null, array $headers = []): array
     {
         $baseUrl = rtrim((string) getenv('INTEGRATION_BASE_URL'), '/');
         if ($baseUrl === '') {
             throw new \RuntimeException('INTEGRATION_BASE_URL is required.');
         }
 
-        $headers = ['Accept: application/json'];
+        $requestHeaders = ['Accept: application/json'];
+        foreach ($headers as $name => $value) {
+            $requestHeaders[] = $name.': '.$value;
+        }
         $content = '';
         if ($body !== null) {
-            $headers[] = 'Content-Type: application/json';
+            $requestHeaders[] = 'Content-Type: application/json';
             $content = json_encode($body, JSON_THROW_ON_ERROR);
         }
 
         $context = stream_context_create([
             'http' => [
                 'method' => strtoupper($method),
-                'header' => implode("\r\n", $headers),
+                'header' => implode("\r\n", $requestHeaders),
                 'content' => $content,
                 'ignore_errors' => true,
                 'timeout' => 20,

@@ -76,6 +76,7 @@ Expected: oversell gives 1 created and 49 rejected; idempotency gives 1 created 
 - [Queue & Worker Strategy](#queue--worker-strategy)
 - [Real-Time WebSocket Broadcasting](#real-time-websocket-broadcasting)
 - [API Reference](#api-reference)
+- [Refunds API](#refunds-api)
 - [Concurrency Properties & Tested Boundaries](#concurrency-properties--tested-boundaries)
 - [Security](#security)
 - [Observability](#observability)
@@ -115,8 +116,10 @@ payment guarantees.
   real customer payments. The payment provider is simulated.
 - It does not provide exactly-once execution, guaranteed delivery, guaranteed
   recovery, or arbitrary crash safety. Queue delivery is at least once.
-- API authentication is not implemented. Broadcast authorization callbacks are
-  present, but end-to-end authenticated private-channel access is not proven.
+- Public order endpoints have no authentication. Agent endpoints use a shared
+  service token and customer ownership checks; this is not end-user identity or
+  role-based Ops authorization. End-to-end authenticated private-channel access
+  is not proven.
 - Cache, queue, locks, sessions, and scheduler mutexes still share one
   eviction-prone Redis instance; a transactional outbox is not implemented.
 - The committed k6 results ([`load-tests/results.md`](load-tests/results.md))
@@ -225,7 +228,8 @@ The codebase follows **Clean Architecture** principles — the domain layer has 
 | `orders` | `status`, `total_amount`, `idempotency_key`, `request_fingerprint`, claim token/timestamps/attempt, provider key, recovery state, `cancelled_at` | Business result and worker/cancellation state machine |
 | `order_items` | `order_id`, `product_id`, `quantity`, `unit_price` | Immutable price snapshot and inventory quantity |
 | `idempotency_requests` | unique key, SHA-256 fingerprint, reservation status, unique nullable `order_id` | Database authority for create-order replay/conflict decisions |
-| `simulated_payment_operations` | unique provider key, order/amount/status, request count, side-effect count | Durable ledger for the simulated provider only |
+| `refunds` | order/customer, decimal amount, mode/status, unique request/provider keys, fingerprint, trace and decision fields | Authoritative refund reservations and outcomes |
+| `simulated_payment_operations` | unique provider key, order/amount/status, `operation` (`charge` or `refund`), request count, side-effect count | Durable ledger for the simulated provider only |
 
 `users 1—N orders 1—N order_items N—1 products` is the business path.
 Each completed `idempotency_requests` row maps to at most one order, and each
@@ -517,7 +521,7 @@ Other explicit limits in Milestone 2:
   but does not guarantee recovery across every infrastructure failure;
 - the simulated provider ledger demonstrates the required idempotency contract,
   but a real gateway must independently honor the stable provider key;
-- API authentication and a transactional outbox are not implemented yet.
+- Public API authentication and a transactional outbox are not implemented yet.
 
 ---
 
@@ -574,6 +578,15 @@ UUID when the request omits the header; a caller-supplied value is echoed as-is.
 | `POST` | `/api/orders/{id}/cancel` | Cancel pending order | None (showcase limitation) |
 | `GET` | `/api/products` | List all products | None |
 | `GET` | `/api/health` | Health check (DB + Redis) | None |
+| `GET` | `/api/agent/orders` | Customer orders, newest first, max 20 | Service token + customer header |
+| `GET` | `/api/agent/orders/{id}` | Customer order with refund totals | Service token + customer header |
+| `POST` | `/api/agent/orders/{id}/refunds` | Create or replay refund | Service token + customer header |
+| `GET` | `/api/agent/orders/{id}/refunds` | Order refunds, newest first | Service token + customer header |
+| `GET` | `/api/agent/refunds/{id}` | Customer-scoped refund details | Service token + customer header |
+| `POST` | `/api/agent/refunds/{id}/approve` | Approve and execute held refund | Service token |
+| `POST` | `/api/agent/refunds/{id}/reject` | Reject held refund | Service token |
+| `GET` | `/api/agent/refunds?status=PENDING_APPROVAL` | Ops queue, oldest first, max 50 | Service token |
+| `GET` | `/api/agent/customers/{customerId}/refunds?since=<ISO-8601>` | Customer refund history since timestamp | Service token |
 
 ### Create Order
 
@@ -832,6 +845,127 @@ curl http://localhost:8000/api/health
 
 ---
 
+## Refunds API
+
+This is a local architecture lab with a simulated refund provider. The service
+token protects `/api/agent/*`; public order routes retain their showcase behavior.
+Set a local `AGENT_SERVICE_TOKEN` before using agent endpoints. An empty configured
+token rejects every request. No real token belongs in committed examples.
+
+### Headers and endpoint contract
+
+All agent requests require `Accept: application/json` and
+`X-Service-Token: <local-service-token>`. JSON writes use
+`Content-Type: application/json`. In the table, **customer** additionally requires
+`X-Customer-Id: <positive-decimal-integer>` (for example `1`, without spaces).
+**Service** requires only the shared service token; it does not require a
+customer header. `X-Trace-Id` is optional and is echoed/generated by middleware.
+
+Every endpoint can return `401 UNAUTHORIZED` for a missing/wrong token, and
+`429 RATE_LIMIT_EXCEEDED` (with `retry_after`). Agent requests have a separate
+token-scoped limit, `AGENT_RATE_LIMIT_PER_MINUTE` (default 600/min), rather than
+the public API's 60/min per-IP limit. Customer endpoints can also return
+`422 VALIDATION_ERROR` for a missing/invalid customer header. Domain/validation
+errors use `{ "message": "...", "error_code": "..." }`; validation also includes
+field `errors`. Unexpected failures can return 500; production mode masks these
+as `INTERNAL_ERROR`.
+
+| Method | Path | Headers | Body / query | Success | Additional errors |
+|--------|------|---------|--------------|---------|-------------------|
+| `GET` | `/api/agent/orders` | Customer | None | `200`, newest 20 owned orders | None |
+| `GET` | `/api/agent/orders/{id}` | Customer | None | `200`, owned order | `404 NOT_FOUND` |
+| `POST` | `/api/agent/orders/{id}/refunds` | Customer + JSON | Create body below | `201` new; `200` exact replay | `404 NOT_FOUND`; `409 IDEMPOTENCY_CONFLICT`; `422 VALIDATION_ERROR`, `ORDER_NOT_REFUNDABLE`, `REFUND_EXCEEDS_PAID` |
+| `GET` | `/api/agent/orders/{id}/refunds` | Customer | None | `200`, refunds newest first | `404 NOT_FOUND` |
+| `GET` | `/api/agent/refunds/{id}` | Customer | None | `200`, owned refund | `404 NOT_FOUND` |
+| `POST` | `/api/agent/refunds/{id}/approve` | Service + JSON | `{ "decided_by": "ops-reviewer" }` | `200`, execution result | `404 NOT_FOUND`; `409 REFUND_NOT_PENDING_APPROVAL`; `422 VALIDATION_ERROR` |
+| `POST` | `/api/agent/refunds/{id}/reject` | Service + JSON | `{ "decided_by": "ops-reviewer", "reason": "Not eligible" }` | `200`, rejected refund | `404 NOT_FOUND`; `409 REFUND_NOT_PENDING_APPROVAL`; `422 VALIDATION_ERROR` |
+| `GET` | `/api/agent/refunds` | Service | Required `status=PENDING_APPROVAL` | `200`, oldest 50 held refunds | `422 VALIDATION_ERROR` for missing/other status |
+| `GET` | `/api/agent/customers/{customerId}/refunds` | Service | Required `since=2026-11-18T00:00:00Z` | `200`, matching refunds newest first | `422 VALIDATION_ERROR` for invalid customer ID or timestamp |
+
+Use a positive integer customer path parameter and an ISO-8601 timestamp in the
+history endpoint. The lower time bound is inclusive; all refund statuses are
+included and this endpoint does not paginate. URL-encode a timezone `+` as `%2B`.
+Missing and foreign-owned orders/refunds share the same `404 NOT_FOUND` body.
+The service-only queue, history and decision routes trust the caller as Ops;
+`decided_by` is a caller-supplied audit label, not an authenticated human identity.
+
+Create body:
+
+```json
+{
+  "amount": "30.00",
+  "reason": "Customer requested a partial refund",
+  "idempotency_key": "refund-example-0001",
+  "mode": "auto"
+}
+```
+
+`amount` must be a positive JSON decimal **string** with 1-8 integer digits and
+at most 2 fractional digits. `"30"` normalizes to `"30.00"`; JSON numbers,
+negative/zero values, exponents, whitespace and excess precision are rejected.
+`reason` is required (1-500 characters), `idempotency_key` is required (8-255),
+and `mode` is `auto` or `needs_approval`. Approval/rejection requires
+`decided_by` (1-100); rejection also requires `reason` (1-500).
+
+Success responses wrap the refund or list in `data`. Refund fields are `id`,
+`order_id`, `amount`, `reason`, `mode`, `status`, `decided_by`, `decision_reason`,
+`failure_message`, `trace_id`, `created_at`, and `updated_at`. Agent order responses
+extend the existing order fields with decimal-string `refunded_amount` (succeeded)
+and `reserved_amount`. A `201` means a refund record was created; its status may
+be `SUCCEEDED`, `PENDING_APPROVAL`, `PENDING`, or `FAILED`, depending on execution.
+Approval also returns its current execution status, not a promise of settlement.
+
+### Refund invariants and recovery
+
+- The `refunds` rows are the monetary authority. Reserved money includes
+  `PENDING_APPROVAL`, `PENDING` and `SUCCEEDED`; `FAILED` and `REJECTED` release
+  their reservation. `RefundAmounts::reserved(rows) <= order.total_amount`,
+  calculated with bcmath at scale 2, must hold for every order.
+- Every refund-mutating transaction locks the order first, then refund rows.
+  The order lock serializes cap checks and decisions. New refunds require `PAID`;
+  when succeeded refunds equal the total, a conditional `PAID -> REFUNDED` update
+  closes the order. Partial success leaves it `PAID`.
+- The gateway runs after reservation/approval commits, outside the transaction.
+  Its result is persisted under a new order-first lock. The stored provider key
+  is reused for retries; the simulator records one logical side effect per key.
+- Ownership is checked before looking up a create idempotency key. The fingerprint
+  binds order, customer, normalized amount and mode, excluding `reason`. Exact
+  replays return `200` and the same refund; changing only the reason does not
+  replace the original reason. Other reuse returns `409 IDEMPOTENCY_CONFLICT`.
+- `auto` executes only if reserved-after-create is within
+  `REFUND_AUTO_APPROVE_LIMIT` (default `50.00`). Larger cumulative reservations
+  are held for approval, including split requests. Empty/malformed limits hold
+  every refund. This ceiling is defense in depth, not agent-side policy approval.
+- A gateway exception/timeout leaves `PENDING` reserved. An exact create replay
+  retries it using the same provider key. An operator can also run
+  `php artisan refunds:reconcile <refundId>`; it prints the resulting status.
+  There is no automatic refund reconciliation scheduler. A real provider would
+  require an authoritative idempotent replay/lookup contract before adoption.
+
+### Threats and verification boundaries
+
+| Attack | Control | Test artifact |
+|--------|---------|---------------|
+| Missing/forged service token | Empty config rejected; constant-time comparison | `AgentAuthAndOwnershipTest` |
+| Access another customer's order/refund | Customer validation and ownership; indistinguishable 404 | `AgentAuthAndOwnershipTest`, `CreateRefundTest` |
+| Parallel refunds exceed the paid amount | Order-first lock and decimal reservation cap | `RefundConcurrencyTest::parallel_refunds_never_exceed_the_paid_total`, `refund-race-test.js` |
+| Replay a key with altered money/mode | Normalized fingerprint and unique key | `CreateRefundTest`; concurrent identical-key integration test |
+| Approve the same refund repeatedly | Locked pending-approval transition and provider key | `DecideRefundTest`; concurrent approval integration test |
+| Split automatic refunds to bypass approval | Cumulative reserved amount compared with auto ceiling | `CreateRefundTest` |
+| Retry after a provider timeout | Reservation retained; stable provider identity | `CreateRefundTest`, `DecideRefundTest`, `SimulatedRefundGatewayTest` |
+
+The new real-MySQL refund tests and k6 script are verification artifacts; their
+presence alone is not evidence of a successful run. Run the integration suite
+using `make test-integration`. For the isolated k6 scenario, follow the reset
+instructions at the top of `load-tests/refund-race-test.js`, then supply
+`AGENT_TOKEN`, `CUSTOMER_ID` (default 1), `ORDER_ID` and optionally `BASE_URL`
+(default `http://localhost:80`). Expected counts are 10 created reservations,
+40 `REFUND_EXCEEDS_PAID` responses, and zero unexpected responses. Run it alone;
+the reset commands destroy the selected demo database/Redis state. Verified run
+evidence belongs in [`load-tests/results.md`](load-tests/results.md).
+
+---
+
 ## Concurrency Properties & Tested Boundaries
 
 ### Overselling Prevention
@@ -901,9 +1035,11 @@ transaction. Any restoration failure rolls the entire cancellation back.
 | **Error Masking** | No stack traces in production — generic messages with error codes; details logged server-side |
 | **Security Headers** | `X-Frame-Options`, `X-Content-Type-Options`, `X-XSS-Protection` via Nginx |
 
-This table is not an authentication claim. Order endpoints currently trust the
-caller-supplied `user_id`; authorization and ownership enforcement remain future
-work.
+Public order endpoints still trust the caller-supplied `user_id`. Agent routes
+use a shared service token and customer ownership checks, with separate
+token-scoped throttling. The service-only Ops routes have no separate human role
+authorization; a compromised service token can access them. See the
+[refund threat table](#threats-and-verification-boundaries).
 
 ---
 
@@ -1149,7 +1285,8 @@ docker compose down
 
 ## CI Pipeline
 
-GitHub Actions workflow with **4 parallel jobs**:
+GitHub Actions workflow with **5 independent jobs**. The diagram shows the four
+existing checks; the integration job runs alongside them:
 
 ```
 ┌─────────────────┐  ┌──────────────┐  ┌───────────────┐  ┌──────────────┐
@@ -1167,13 +1304,16 @@ GitHub Actions workflow with **4 parallel jobs**:
 | **Unit Tests** | 61 tests — domain entities, state machine, and application use cases with doubles |
 | **Feature Tests** | 26 tests — fast HTTP lifecycle, recovery, idempotency, scheduler wiring, and health using the `phpunit.xml` SQLite/array/sync profile |
 | **Docker Build** | Builds the Compose images, starts the services, and prints `docker compose ps`; it does not assert application health |
+| **Integration** | Runs the real MySQL/Redis/nginx concurrency suite through `docker-compose.integration.yml` under project `dops-ci`; always removes its containers and volumes |
 
 **Observed on 2026-08-29:** the local fast suite passed 87 tests / 358
 assertions. The separate real-infrastructure profile passed 21 tests / 183
 assertions, its focused Milestone 2A.4 run passed 2 tests / 40 assertions, and
 the isolated scheduler runtime passed 1 test / 6 assertions. The current GitHub
-Actions workflow does **not** run the real-infrastructure or scheduler suites;
-use the documented Compose commands for those checks.
+Actions workflow now includes the real-infrastructure suite (excluding the
+`scheduler-runtime` group). Scheduler runtime remains a separate local check.
+These historical counts do not include the newly added refund tests; adding the
+CI job is not evidence that it has already passed on a hosted runner.
 
 No PHPStan or Psalm configuration exists in this repository. Current static
 gates are PHP syntax, Composer validation, route resolution, and Pint; they
