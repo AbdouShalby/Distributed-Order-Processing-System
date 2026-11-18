@@ -76,6 +76,7 @@ class EloquentOrderRepository implements OrderRepositoryInterface
                 'updated_at' => now(),
             ]);
     }
+
     public function claimForProcessing(
         int $orderId,
         \DateTimeImmutable $claimedAt,
@@ -253,7 +254,6 @@ class EloquentOrderRepository implements OrderRepositoryInterface
 
         return $model ? OrderMapper::toEntity($model) : null;
     }
-
 
     public function findByUserId(int $userId, ?string $status = null, int $page = 1, int $perPage = 15): array
     {
