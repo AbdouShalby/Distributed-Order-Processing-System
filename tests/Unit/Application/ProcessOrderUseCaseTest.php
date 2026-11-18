@@ -4,21 +4,28 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Application;
 
+use App\Application\EventHandlers\OrderFailedHandler;
+use App\Application\EventHandlers\OrderPaidHandler;
+use App\Application\UseCases\ProcessOrder\ProcessOrderOutcome;
 use App\Application\UseCases\ProcessOrder\ProcessOrderUseCase;
 use App\Domain\Order\Contracts\OrderRepositoryInterface;
 use App\Domain\Order\Entities\Order;
 use App\Domain\Order\Enums\OrderStatus;
 use App\Domain\Order\ValueObjects\OrderItem;
+use App\Domain\Order\ValueObjects\ProcessingClaim;
 use App\Domain\Payment\Contracts\PaymentGatewayInterface;
+use App\Domain\Payment\Exceptions\PaymentGatewayUnavailableException;
+use App\Domain\Payment\Exceptions\PaymentOutcomeUnknownException;
 use App\Domain\Payment\ValueObjects\PaymentResult;
 use App\Infrastructure\Broadcasting\Events\OrderFailedEvent;
 use App\Infrastructure\Broadcasting\Events\OrderPaidEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
+use Mockery;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
-class ProcessOrderUseCaseTest extends TestCase
+final class ProcessOrderUseCaseTest extends TestCase
 {
     use RefreshDatabase;
 
@@ -28,206 +35,202 @@ class ProcessOrderUseCaseTest extends TestCase
 
     private PaymentGatewayInterface $paymentGateway;
 
+    private OrderPaidHandler $orderPaidHandler;
+
+    private OrderFailedHandler $orderFailedHandler;
+
     protected function setUp(): void
     {
         parent::setUp();
 
         $this->orderRepo = $this->mock(OrderRepositoryInterface::class);
         $this->paymentGateway = $this->mock(PaymentGatewayInterface::class);
+        $this->orderPaidHandler = $this->mock(OrderPaidHandler::class);
+        $this->orderFailedHandler = $this->mock(OrderFailedHandler::class);
 
         $this->useCase = new ProcessOrderUseCase(
             $this->orderRepo,
             $this->paymentGateway,
+            $this->orderPaidHandler,
+            $this->orderFailedHandler,
         );
     }
-
-    private function makePendingOrder(): Order
-    {
-        $order = new Order(
-            id: 1,
-            userId: 10,
-            status: OrderStatus::PENDING,
-            totalAmount: '100.00',
-            idempotencyKey: 'key-123',
-        );
-        $order->setItems([
-            new OrderItem(productId: 1, quantity: 2, unitPrice: '50.00'),
-        ]);
-
-        return $order;
-    }
-
-    // ─── Payment Success ──────────────────────────────
 
     #[Test]
-    public function it_processes_pending_order_and_marks_paid_on_success(): void
+    public function only_a_successful_claim_may_charge_and_mark_paid(): void
     {
         Event::fake([OrderPaidEvent::class]);
+        $claim = $this->makeClaim();
 
-        $order = $this->makePendingOrder();
-
-        $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(1)
-            ->once()
-            ->andReturn($order);
-
-        // First updateStatus: PROCESSING
-        // Second updateStatus: PAID
-        $this->orderRepo
-            ->shouldReceive('updateStatus')
-            ->twice();
-
+        $this->expectClaim($claim);
         $this->paymentGateway
             ->shouldReceive('charge')
-            ->with(1, '100.00')
             ->once()
+            ->with(1, '100.00', 'order-payment:v1:1')
             ->andReturn(PaymentResult::successful());
+        $this->orderRepo
+            ->shouldReceive('completeProcessing')
+            ->once()
+            ->with(1, 'claim-token-1', OrderStatus::PAID)
+            ->andReturnTrue();
+        $this->orderPaidHandler->shouldReceive('handle')->once();
 
-        $this->useCase->execute(1);
+        $outcome = $this->useCase->execute(1, 'trace-1');
 
-        $this->assertSame(OrderStatus::PAID, $order->getStatus());
-
-        Event::assertDispatched(OrderPaidEvent::class, function ($event) {
-            return $event->orderId === '1'
-                && $event->userId === '10'
-                && $event->total === '100.00';
-        });
+        $this->assertSame(ProcessOrderOutcome::PAID, $outcome);
+        Event::assertDispatched(OrderPaidEvent::class);
     }
 
-    // ─── Payment Failure ──────────────────────────────
-
     #[Test]
-    public function it_marks_order_failed_when_payment_fails(): void
+    public function a_provider_decline_is_a_durable_terminal_failure(): void
     {
         Event::fake([OrderFailedEvent::class]);
+        $claim = $this->makeClaim();
 
-        $order = $this->makePendingOrder();
-
-        $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(1)
-            ->once()
-            ->andReturn($order);
-
-        $this->orderRepo
-            ->shouldReceive('updateStatus')
-            ->twice();
-
+        $this->expectClaim($claim);
         $this->paymentGateway
             ->shouldReceive('charge')
-            ->with(1, '100.00')
             ->once()
+            ->with(1, '100.00', 'order-payment:v1:1')
             ->andReturn(PaymentResult::failed('Insufficient funds'));
-
-        $this->useCase->execute(1);
-
-        $this->assertSame(OrderStatus::FAILED, $order->getStatus());
-
-        Event::assertDispatched(OrderFailedEvent::class, function ($event) {
-            return $event->orderId === '1'
-                && $event->reason === 'Insufficient funds';
-        });
-    }
-
-    // ─── Idempotency Guard ────────────────────────────
-
-    #[Test]
-    public function it_skips_processing_if_order_is_not_pending(): void
-    {
-        $order = new Order(
-            id: 1,
-            userId: 10,
-            status: OrderStatus::PAID,
-            totalAmount: '100.00',
-            idempotencyKey: 'key-123',
-        );
-
         $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(1)
+            ->shouldReceive('completeProcessing')
             ->once()
-            ->andReturn($order);
+            ->with(1, 'claim-token-1', OrderStatus::FAILED)
+            ->andReturnTrue();
+        $this->orderFailedHandler->shouldReceive('handle')->once();
 
-        // Should NOT call payment or update status
-        $this->paymentGateway->shouldNotReceive('charge');
-        $this->orderRepo->shouldNotReceive('updateStatus');
+        $outcome = $this->useCase->execute(1);
 
-        $this->useCase->execute(1);
-
-        // Status unchanged
-        $this->assertSame(OrderStatus::PAID, $order->getStatus());
+        $this->assertSame(ProcessOrderOutcome::FAILED, $outcome);
+        Event::assertDispatched(OrderFailedEvent::class);
     }
 
     #[Test]
-    public function it_skips_processing_if_order_already_processing(): void
+    public function duplicate_delivery_cannot_charge_without_a_claim(): void
+    {
+        $this->expectRejectedClaim();
+        $this->paymentGateway->shouldNotReceive('charge');
+        $this->orderRepo->shouldNotReceive('completeProcessing');
+
+        $outcome = $this->useCase->execute(1);
+
+        $this->assertSame(ProcessOrderOutcome::SKIPPED, $outcome);
+    }
+
+    #[Test]
+    public function a_stale_worker_cannot_commit_over_a_newer_claim(): void
+    {
+        Event::fake();
+        $claim = $this->makeClaim();
+
+        $this->expectClaim($claim);
+        $this->paymentGateway
+            ->shouldReceive('charge')
+            ->once()
+            ->andReturn(PaymentResult::successful());
+        $this->orderRepo
+            ->shouldReceive('completeProcessing')
+            ->once()
+            ->with(1, 'claim-token-1', OrderStatus::PAID)
+            ->andReturnFalse();
+        $this->orderPaidHandler->shouldNotReceive('handle');
+        $this->orderFailedHandler->shouldNotReceive('handle');
+
+        $outcome = $this->useCase->execute(1);
+
+        $this->assertSame(ProcessOrderOutcome::LOST_CLAIM, $outcome);
+        Event::assertNotDispatched(OrderPaidEvent::class);
+        Event::assertNotDispatched(OrderFailedEvent::class);
+    }
+
+    #[Test]
+    public function failure_before_provider_acceptance_expires_the_lease_for_retry(): void
+    {
+        $claim = $this->makeClaim();
+        $exception = new PaymentGatewayUnavailableException('offline');
+
+        $this->expectClaim($claim);
+        $this->paymentGateway
+            ->shouldReceive('charge')
+            ->once()
+            ->with(1, '100.00', 'order-payment:v1:1')
+            ->andThrow($exception);
+        $this->expectLeaseExpiry();
+
+        $this->expectExceptionObject($exception);
+        $this->useCase->execute(1);
+    }
+
+    #[Test]
+    public function ambiguous_provider_timeout_expires_the_lease_and_preserves_payment_identity(): void
+    {
+        $claim = $this->makeClaim();
+        $exception = new PaymentOutcomeUnknownException('unknown');
+
+        $this->expectClaim($claim);
+        $this->paymentGateway
+            ->shouldReceive('charge')
+            ->once()
+            ->with(1, '100.00', 'order-payment:v1:1')
+            ->andThrow($exception);
+        $this->expectLeaseExpiry();
+
+        $this->expectExceptionObject($exception);
+        $this->useCase->execute(1);
+    }
+
+    private function makeClaim(): ProcessingClaim
     {
         $order = new Order(
             id: 1,
             userId: 10,
             status: OrderStatus::PROCESSING,
             totalAmount: '100.00',
-            idempotencyKey: 'key-123',
+            idempotencyKey: 'request-key',
         );
+        $order->setItems([
+            new OrderItem(productId: 1, quantity: 2, unitPrice: '50.00'),
+        ]);
 
-        $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(1)
-            ->once()
-            ->andReturn($order);
-
-        $this->paymentGateway->shouldNotReceive('charge');
-        $this->orderRepo->shouldNotReceive('updateStatus');
-
-        $this->useCase->execute(1);
+        return new ProcessingClaim(
+            order: $order,
+            token: 'claim-token-1',
+            claimedAt: new \DateTimeImmutable('2026-08-27T10:00:00+00:00'),
+            leaseUntil: new \DateTimeImmutable('2026-08-27T10:00:30+00:00'),
+            attempt: 1,
+            paymentIdempotencyKey: 'order-payment:v1:1',
+        );
     }
 
-    // ─── Missing Order ────────────────────────────────
-
-    #[Test]
-    public function it_does_nothing_when_order_not_found(): void
+    private function expectClaim(ProcessingClaim $claim): void
     {
         $this->orderRepo
-            ->shouldReceive('findById')
-            ->with(999)
+            ->shouldReceive('claimForProcessing')
+            ->once()
+            ->with(
+                1,
+                Mockery::type(\DateTimeImmutable::class),
+                Mockery::type(\DateTimeImmutable::class),
+                Mockery::type('string')
+            )
+            ->andReturn($claim);
+    }
+
+    private function expectRejectedClaim(): void
+    {
+        $this->orderRepo
+            ->shouldReceive('claimForProcessing')
             ->once()
             ->andReturnNull();
-
-        $this->paymentGateway->shouldNotReceive('charge');
-        $this->orderRepo->shouldNotReceive('updateStatus');
-
-        // No exception thrown — graceful no-op
-        $this->useCase->execute(999);
     }
 
-    // ─── State Machine Transition ─────────────────────
-
-    #[Test]
-    public function it_transitions_through_processing_before_final_state(): void
+    private function expectLeaseExpiry(): void
     {
-        Event::fake();
-
-        $order = $this->makePendingOrder();
-        $statusTransitions = [];
-
         $this->orderRepo
-            ->shouldReceive('findById')
-            ->andReturn($order);
-
-        $this->orderRepo
-            ->shouldReceive('updateStatus')
-            ->twice()
-            ->andReturnUsing(function (Order $o) use (&$statusTransitions) {
-                $statusTransitions[] = $o->getStatus()->value;
-            });
-
-        $this->paymentGateway
-            ->shouldReceive('charge')
-            ->andReturn(PaymentResult::successful());
-
-        $this->useCase->execute(1);
-
-        // Must transition PENDING → PROCESSING → PAID (in order)
-        $this->assertSame(['PROCESSING', 'PAID'], $statusTransitions);
+            ->shouldReceive('expireProcessingLease')
+            ->once()
+            ->with(1, 'claim-token-1', Mockery::type(\DateTimeImmutable::class))
+            ->andReturnTrue();
     }
 }

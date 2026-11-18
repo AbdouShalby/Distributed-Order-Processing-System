@@ -1,0 +1,167 @@
+services:
+  mysql:
+    image: mysql:8.0
+    command: --log-bin-trust-function-creators=1
+    environment:
+      MYSQL_ROOT_PASSWORD: integration-root
+      MYSQL_DATABASE: dops_integration
+      MYSQL_USER: dops_integration
+      MYSQL_PASSWORD: integration-secret
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      # Root ping also succeeds against MySQL's temporary initialization server.
+      # Query through the final application user so dependants start only after
+      # the database/user bootstrap and final server restart have completed.
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -udops_integration -pintegration-secret -D dops_integration -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    volumes:
+      - ./:/var/www
+      - integration-vendor:/var/www/vendor
+    environment: &integration-environment
+      APP_ENV: integration
+      APP_KEY: ${APP_KEY:?Set APP_KEY in .env first (php artisan key:generate), see Quick Start}
+      APP_DEBUG: "true"
+      APP_URL: http://nginx
+      LOG_CHANNEL: stderr
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: dops_integration
+      DB_USERNAME: dops_integration
+      DB_PASSWORD: integration-secret
+      REDIS_CLIENT: phpredis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      REDIS_CACHE_DB: 1
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+      REDIS_QUEUE_RETRY_AFTER: 3
+      SESSION_DRIVER: redis
+      BROADCAST_CONNECTION: log
+      ORDER_PROCESSING_LEASE_SECONDS: 30
+      SIMULATED_PAYMENT_FORCE_OUTCOME: success
+      SIMULATED_PAYMENT_FAIL_BEFORE_PERSIST: "false"
+      SIMULATED_PAYMENT_TIMEOUT_AFTER_PERSIST: "false"
+    depends_on:
+      dependencies:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  dependencies:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    volumes:
+      - ./:/var/www
+      - integration-vendor:/var/www/vendor
+    environment: *integration-environment
+    command:
+      - /bin/sh
+      - -lc
+      - composer install --no-interaction --prefer-dist --no-progress --no-scripts && exec tail -f /dev/null
+    healthcheck:
+      test: ["CMD", "test", "-f", "/var/www/vendor/autoload.php"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./:/var/www
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+
+  test:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    volumes:
+      - ./:/var/www
+      - integration-vendor:/var/www/vendor
+    environment:
+      <<: *integration-environment
+      INTEGRATION_BASE_URL: http://nginx
+    depends_on:
+      dependencies:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nginx:
+        condition: service_started
+    command:
+      - /bin/sh
+      - -lc
+      - php artisan migrate:fresh --seed --force && php vendor/bin/phpunit -c phpunit.integration.xml --exclude-group scheduler-runtime
+
+  scheduler:
+    profiles: ["scheduler-verification"]
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    user: "1000:1000"
+    volumes:
+      - ./:/var/www
+      - integration-vendor:/var/www/vendor
+    environment:
+      <<: *integration-environment
+      APP_ENV: local
+    depends_on:
+      dependencies:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["php", "/var/www/artisan", "schedule:work"]
+    restart: unless-stopped
+
+  scheduler-test:
+    profiles: ["scheduler-verification"]
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    volumes:
+      - ./:/var/www
+      - integration-vendor:/var/www/vendor
+    environment: *integration-environment
+    depends_on:
+      scheduler:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -lc
+      - php artisan migrate:fresh --seed --force && php vendor/bin/phpunit -c phpunit.integration.xml --group scheduler-runtime
+
+volumes:
+  integration-vendor:

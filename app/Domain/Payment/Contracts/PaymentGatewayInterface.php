@@ -9,8 +9,12 @@ use App\Domain\Payment\ValueObjects\PaymentResult;
 interface PaymentGatewayInterface
 {
     /**
-     * Simulate a payment for an order.
-     * Returns a PaymentResult indicating success or failure.
+     * Charge one logical payment operation. Every retry must reuse the same
+     * provider idempotency key.
      */
-    public function charge(int $orderId, string $amount): PaymentResult;
+    public function charge(
+        int $orderId,
+        string $amount,
+        string $providerIdempotencyKey
+    ): PaymentResult;
 }
