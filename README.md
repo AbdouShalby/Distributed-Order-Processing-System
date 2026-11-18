@@ -1486,6 +1486,10 @@ Detailed Mermaid diagrams are available in [`docs/architecture.md`](docs/archite
 
 ---
 
+## How this was built
+
+I defined the problem, the design and the acceptance criteria, and reviewed and verified the result. AI coding assistants (Claude Code, Codex, Cursor) did most of the implementation.
+
 ## License
 
 [MIT](LICENSE)
