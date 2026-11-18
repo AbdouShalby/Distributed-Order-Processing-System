@@ -61,7 +61,7 @@ final class CreateRefundUseCase
                     throw new OrderNotRefundableException;
                 }
 
-                $rows = $this->refunds->forOrderLocked($orderId);
+                $rows = $this->refunds->forOrder($orderId);
                 $reserved = RefundAmounts::reserved($rows);
                 if (! RefundAmounts::fitsCap($reserved, $amount, $order->getTotalAmount())) {
                     throw new RefundExceedsPaidException;
@@ -83,7 +83,7 @@ final class CreateRefundUseCase
                 ]);
 
                 return ['refund' => $refund, 'created' => true];
-            });
+            }, attempts: 3);
         } catch (UniqueConstraintViolationException $e) {
             // A competing order may have inserted the global key. Read only after rollback.
             $existing = $this->refunds->findByKey($idempotencyKey);

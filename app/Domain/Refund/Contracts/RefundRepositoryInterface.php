@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domain\Refund\Contracts;
 
+use App\Domain\Refund\RefundStatus;
 use App\Models\Refund;
 
 interface RefundRepositoryInterface
@@ -12,19 +13,13 @@ interface RefundRepositoryInterface
 
     /**
      * Read-only, newest first; does not acquire row locks.
+     * Inside a refund transaction, call only after acquiring the order row lock.
      *
      * @return list<Refund>
      */
     public function forOrder(int $orderId): array;
 
     public function findForCustomer(int $refundId, int $customerId): ?Refund;
-
-    /**
-     * Callers must already hold the order row lock in their transaction.
-     *
-     * @return list<Refund>
-     */
-    public function forOrderLocked(int $orderId): array;
 
     /**
      * @param  array<string, mixed>  $attributes
@@ -40,7 +35,7 @@ interface RefundRepositoryInterface
     /**
      * @return list<Refund>
      */
-    public function pendingApproval(int $limit): array;
+    public function withStatus(RefundStatus $status, int $limit): array;
 
     /**
      * @return list<Refund>

@@ -61,6 +61,6 @@ final class DecideRefundUseCase
             $this->refunds->save($refund);
 
             return $refund;
-        });
+        }, attempts: 3);
     }
 }

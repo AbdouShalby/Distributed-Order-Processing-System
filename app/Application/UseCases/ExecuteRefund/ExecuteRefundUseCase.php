@@ -35,10 +35,12 @@ final class ExecuteRefundUseCase
 
         try {
             $result = $this->gateway->refund($refund->order_id, $refund->amount, $refund->provider_idempotency_key);
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
             Log::warning('Refund gateway outcome is unknown.', [
                 'trace_id' => $refund->trace_id,
                 'refund_id' => $refund->id,
+                'exception_class' => get_class($e),
+                'message' => $e->getMessage(),
             ]);
 
             return $refund;
@@ -64,11 +66,11 @@ final class ExecuteRefundUseCase
             $this->refunds->save($locked);
 
             if ($result->isSuccessful()
-                && bccomp(RefundAmounts::succeeded($this->refunds->forOrderLocked($refund->order_id)), $order->getTotalAmount(), 2) === 0) {
+                && bccomp(RefundAmounts::succeeded($this->refunds->forOrder($refund->order_id)), $order->getTotalAmount(), 2) === 0) {
                 $this->orders->markRefundedIfPaid($refund->order_id);
             }
 
             return $locked;
-        });
+        }, attempts: 3);
     }
 }

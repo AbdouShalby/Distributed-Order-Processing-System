@@ -93,6 +93,73 @@ final class RefundConcurrencyTest extends IntegrationTestCase
     }
 
     #[Test]
+    public function parallel_first_refunds_on_distinct_orders_never_fail(): void
+    {
+        $orders = [];
+        $actors = [];
+        for ($index = 0; $index < 8; $index++) {
+            $order = $this->paidOrder();
+            $orders[] = $order;
+            $actors[] = $this->createActor($order->id, [
+                'amount' => '10.00',
+                'reason' => 'Concurrent first refunds on distinct orders',
+                'idempotency_key' => "refund-distinct-order-{$index}",
+                'mode' => 'needs_approval',
+            ]);
+        }
+        $this->assertSame(0, Refund::query()->count());
+
+        $results = $this->runner->run($actors);
+        $report = json_encode($results, JSON_THROW_ON_ERROR);
+        $this->assertCount(8, $results, $report);
+        foreach ($results as $result) {
+            $this->assertSame(201, $result['status'] ?? null, $report);
+            $this->assertSame('10.00', $result['body']['data']['amount'], $report);
+        }
+        $this->assertSame(8, Refund::query()->count());
+        foreach ($orders as $order) {
+            $refund = Refund::query()->where('order_id', $order->id)->sole();
+            $this->assertSame('10.00', $refund->amount);
+        }
+
+        $this->assertRefundInvariants();
+    }
+
+    #[Test]
+    public function same_key_on_two_orders_yields_one_refund_and_one_conflict(): void
+    {
+        $first = $this->paidOrder();
+        $second = $this->paidOrder();
+        $body = [
+            'amount' => '10.00',
+            'reason' => 'Concurrent key reuse on distinct orders',
+            'idempotency_key' => 'refund-two-orders-same-key',
+            'mode' => 'needs_approval',
+        ];
+        $results = $this->runner->run([
+            $this->createActor($first->id, $body),
+            $this->createActor($second->id, $body),
+        ]);
+        $report = json_encode($results, JSON_THROW_ON_ERROR);
+        $statuses = array_column($results, 'status');
+        sort($statuses);
+        $this->assertSame([201, 409], $statuses, $report);
+        $this->assertSame(1, Refund::query()->count());
+        $refund = Refund::query()->sole();
+        foreach ($results as $result) {
+            if ($result['status'] === 409) {
+                $this->assertSame('IDEMPOTENCY_CONFLICT', $result['body']['error_code'], $report);
+                $this->assertArrayNotHasKey('data', $result['body'], $report);
+            } else {
+                $this->assertSame($refund->id, $result['body']['data']['id'], $report);
+                $this->assertSame($refund->order_id, $result['body']['data']['order_id'], $report);
+            }
+        }
+
+        $this->assertRefundInvariants();
+    }
+
+    #[Test]
     public function parallel_double_approval_executes_once(): void
     {
         $order = $this->paidOrder();

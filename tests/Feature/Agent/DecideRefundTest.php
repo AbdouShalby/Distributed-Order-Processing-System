@@ -44,7 +44,8 @@ final class DecideRefundTest extends TestCase
         $this->travelTo(now()->startOfSecond());
 
         $this->postJson($this->url($refund, 'approve'), ['decided_by' => 'ops-reviewer'], $this->headers())
-            ->assertOk()->assertJsonPath('data.status', 'SUCCEEDED')->assertJsonPath('data.decided_by', 'ops-reviewer');
+            ->assertOk()->assertJsonPath('data.status', 'SUCCEEDED')->assertJsonPath('data.decided_by', 'ops-reviewer')
+            ->assertJsonPath('data.customer_id', $refund->customer_id);
         $this->assertTrue($refund->fresh()->decided_at->equalTo(now()));
         $this->postJson($this->url($refund, 'approve'), ['decided_by' => 'another-reviewer'], $this->headers())
             ->assertConflict()->assertJsonPath('error_code', 'REFUND_NOT_PENDING_APPROVAL');
@@ -82,6 +83,7 @@ final class DecideRefundTest extends TestCase
         $this->travelTo(now()->startOfSecond());
         $this->postJson($this->url($refund, 'reject'), ['decided_by' => 'ops', 'reason' => 'Request is not eligible.'], $this->headers())
             ->assertOk()->assertJsonPath('data.status', 'REJECTED')
+            ->assertJsonPath('data.customer_id', $refund->customer_id)
             ->assertJsonPath('data.decided_by', 'ops')->assertJsonPath('data.decision_reason', 'Request is not eligible.');
         $this->assertTrue($refund->fresh()->decided_at->equalTo(now()));
         $this->postJson($this->url($refund, 'approve'), ['decided_by' => 'ops'], $this->headers())
@@ -118,6 +120,83 @@ final class DecideRefundTest extends TestCase
     }
 
     #[Test]
+    public function reconcile_all_pending_replays_timed_out_refunds_once_and_skips_other_statuses(): void
+    {
+        $first = $this->heldRefund();
+        $second = $this->heldRefund();
+        $held = $this->heldRefund();
+        $rejected = $this->heldRefund();
+        $rejected->update(['status' => 'REJECTED']);
+        config(['services.simulated_payment.timeout_after_persist' => true]);
+        foreach ([$first, $second] as $refund) {
+            $this->postJson($this->url($refund, 'approve'), ['decided_by' => 'ops'], $this->headers())
+                ->assertOk()->assertJsonPath('data.status', 'PENDING');
+        }
+        $second->forceFill(['created_at' => $first->created_at->subDay()])->save();
+        config(['services.simulated_payment.timeout_after_persist' => false]);
+
+        $this->artisan('refunds:reconcile', ['--all-pending' => true])
+            ->expectsOutput("{$second->id}: SUCCEEDED")
+            ->expectsOutput("{$first->id}: SUCCEEDED")->assertSuccessful();
+        $this->artisan('refunds:reconcile', ['--all-pending' => true])->doesntExpectOutput()->assertSuccessful();
+        foreach ([$first, $second] as $refund) {
+            $this->assertSame(RefundStatus::SUCCEEDED, $refund->fresh()->status);
+            $this->assertDatabaseHas('simulated_payment_operations', [
+                'idempotency_key' => $refund->provider_idempotency_key, 'request_count' => 2, 'side_effect_count' => 1,
+            ]);
+        }
+        $this->assertSame(RefundStatus::PENDING_APPROVAL, $held->fresh()->status);
+        $this->assertSame(RefundStatus::REJECTED, $rejected->fresh()->status);
+        $this->assertDatabaseCount('simulated_payment_operations', 2);
+    }
+
+    #[Test]
+    public function reconcile_all_pending_limits_to_the_oldest_hundred_with_id_tiebreaker(): void
+    {
+        $refund = $this->heldRefund(amount: '0.01');
+        $refund->forceFill(['status' => 'PENDING', 'created_at' => '2026-01-02 00:00:00'])->save();
+        $refunds = [$refund];
+        for ($index = 1; $index <= 100; $index++) {
+            $copy = $refund->replicate();
+            $copy->forceFill([
+                'idempotency_key' => 'batch-key-'.$index,
+                'provider_idempotency_key' => 'batch-provider-'.$index,
+                'created_at' => $index === 100 ? '2026-01-01 00:00:00' : '2026-01-02 00:00:00',
+            ])->save();
+            $refunds[] = $copy;
+        }
+        $expected = [$refunds[100], ...array_slice($refunds, 0, 99)];
+        $keys = [];
+        $gateway = Mockery::mock(PaymentGatewayInterface::class);
+        $gateway->shouldReceive('refund')->times(100)->andReturnUsing(function (int $orderId, string $amount, string $key) use (&$keys): PaymentResult {
+            $keys[] = $key;
+
+            return PaymentResult::successful();
+        });
+        $this->app->instance(PaymentGatewayInterface::class, $gateway);
+        $command = $this->artisan('refunds:reconcile', ['--all-pending' => true]);
+        foreach ($expected as $row) {
+            $command->expectsOutput("{$row->id}: SUCCEEDED");
+        }
+        $command->assertSuccessful()->run();
+
+        $this->assertSame(array_map(fn (Refund $row): string => $row->provider_idempotency_key, $expected), $keys);
+        $this->assertSame(100, Refund::query()->where('status', 'SUCCEEDED')->count());
+        $this->assertSame(RefundStatus::PENDING, $refunds[99]->fresh()->status);
+    }
+
+    #[Test]
+    public function reconcile_requires_one_target_form(): void
+    {
+        $refund = $this->heldRefund();
+        $this->artisan('refunds:reconcile')->expectsOutput('Provide a refund ID or --all-pending.')->assertFailed();
+        $this->artisan('refunds:reconcile', ['refundId' => $refund->id, '--all-pending' => true])
+            ->expectsOutput('Choose a refund ID or --all-pending, not both.')->assertFailed();
+        $this->assertSame(RefundStatus::PENDING_APPROVAL, $refund->fresh()->status);
+        $this->assertDatabaseCount('simulated_payment_operations', 0);
+    }
+
+    #[Test]
     public function reconcile_does_not_touch_held_or_final_refunds_and_missing_refund_fails(): void
     {
         $refund = $this->heldRefund();
@@ -132,10 +211,11 @@ final class DecideRefundTest extends TestCase
     }
 
     #[Test]
-    public function queue_lists_only_pending_approval_oldest_first_with_limit_fifty(): void
+    #[DataProvider('queueStatuses')]
+    public function queue_lists_only_the_requested_status_oldest_first_with_limit_fifty(string $status): void
     {
         $refund = $this->heldRefund();
-        $refund->forceFill(['created_at' => '2026-01-01 00:00:00'])->save();
+        $refund->forceFill(['status' => $status, 'created_at' => '2026-01-01 00:00:00'])->save();
         $ids = [$refund->id];
         for ($index = 1; $index <= 51; $index++) {
             $copy = $refund->replicate();
@@ -147,22 +227,31 @@ final class DecideRefundTest extends TestCase
             $ids[] = $copy->id;
         }
         $excluded = $this->heldRefund();
-        foreach (['PENDING', 'SUCCEEDED', 'FAILED', 'REJECTED'] as $status) {
-            $excluded->update(['status' => $status]);
-            $response = $this->getJson('/api/agent/refunds?status=PENDING_APPROVAL', $this->headers())
-                ->assertOk()->assertJsonCount(50, 'data');
+        foreach (RefundStatus::cases() as $excludedStatus) {
+            if ($excludedStatus->value === $status) {
+                continue;
+            }
+            $excluded->update(['status' => $excludedStatus]);
+            $response = $this->getJson('/api/agent/refunds?status='.$status, $this->headers())
+                ->assertOk()->assertJsonCount(50, 'data')->assertJsonPath('data.0.customer_id', $refund->customer_id);
             $this->assertSame(array_slice($ids, 0, 50), array_column($response->json('data'), 'id'));
         }
     }
 
-    #[Test]
-    public function queue_requires_the_exact_pending_approval_status(): void
+    public static function queueStatuses(): array
     {
-        foreach (['', '?status=PENDING', '?status=SUCCEEDED', '?status=pending_approval', '?status[]=PENDING_APPROVAL', '?status=%20PENDING_APPROVAL', '?status=PENDING_APPROVAL%0A'] as $query) {
+        return [['PENDING_APPROVAL'], ['PENDING']];
+    }
+
+    #[Test]
+    public function queue_requires_an_exact_supported_pending_status(): void
+    {
+        foreach (['', '?status=SUCCEEDED', '?status=pending_approval', '?status[]=PENDING_APPROVAL', '?status=%20PENDING_APPROVAL', '?status=PENDING_APPROVAL%0A', '?status=PENDING%20', '?status=%20PENDING', '?status=PENDING%0A', '?status[]=PENDING'] as $query) {
             $this->getJson('/api/agent/refunds'.$query, $this->headers())->assertUnprocessable()
                 ->assertJsonPath('error_code', 'VALIDATION_ERROR')->assertJsonValidationErrors('status');
         }
         $this->getJson('/api/agent/refunds?status=PENDING_APPROVAL', $this->headers())->assertOk()->assertExactJson(['data' => []]);
+        $this->getJson('/api/agent/refunds?status=PENDING', $this->headers())->assertOk()->assertExactJson(['data' => []]);
     }
 
     #[Test]
@@ -178,7 +267,7 @@ final class DecideRefundTest extends TestCase
         $newest->forceFill(['created_at' => '2026-01-02 12:00:00', 'status' => 'SUCCEEDED'])->save();
         $other->forceFill(['created_at' => '2026-01-03 12:00:00'])->save();
         $response = $this->getJson('/api/agent/customers/'.$order->user_id.'/refunds?since=2026-01-01T14:00:00%2B02:00', $this->headers())
-            ->assertOk()->assertJsonCount(2, 'data');
+            ->assertOk()->assertJsonCount(2, 'data')->assertJsonPath('data.0.customer_id', $order->user_id);
         $this->assertSame([$newest->id, $boundary->id], array_column($response->json('data'), 'id'));
         $this->getJson('/api/agent/customers/999999/refunds?since=2026-01-01T12:00:00Z', $this->headers())
             ->assertOk()->assertExactJson(['data' => []]);

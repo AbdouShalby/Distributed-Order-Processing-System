@@ -12,7 +12,7 @@ return new class extends Migration
     {
         Schema::create('refunds', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('order_id')->constrained('orders')->cascadeOnDelete();
+            $table->foreignId('order_id')->constrained('orders')->restrictOnDelete();
             $table->unsignedBigInteger('customer_id');
             $table->decimal('amount', 10, 2);
             $table->string('reason', 500);

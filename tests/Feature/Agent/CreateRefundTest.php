@@ -57,14 +57,54 @@ final class CreateRefundTest extends TestCase
         $data = $response->json('data');
 
         $this->assertSame([
-            'id', 'order_id', 'amount', 'reason', 'mode', 'status', 'decided_by',
+            'id', 'order_id', 'customer_id', 'amount', 'reason', 'mode', 'status', 'decided_by',
             'decision_reason', 'failure_message', 'trace_id', 'created_at', 'updated_at',
         ], array_keys($data));
+        $this->assertSame($order->user_id, $data['customer_id']);
         $this->getJson('/api/agent/refunds/'.$data['id'], $headers)->assertOk()->assertExactJson(['data' => $data]);
         $this->getJson($this->url($order), $headers)->assertOk()->assertExactJson(['data' => [$data]]);
         $this->getJson('/api/agent/orders/'.$order->id, $headers)->assertOk()
             ->assertJsonPath('data.refunded_amount', '20.00')->assertJsonPath('data.reserved_amount', '20.00');
         $this->assertDatabaseHas('refunds', ['id' => $data['id'], 'customer_id' => $order->user_id]);
+    }
+
+    #[Test]
+    #[DataProvider('invalidTraceIds')]
+    public function invalid_trace_id_is_replaced_and_stored_without_failing_create(string $traceId): void
+    {
+        $order = $this->createOrder();
+        $response = $this->postJson($this->url($order), $this->body(), $this->headers($order) + ['X-Trace-Id' => $traceId])
+            ->assertCreated();
+        $generated = $response->json('data.trace_id');
+
+        $this->assertMatchesRegularExpression('/\A[A-Za-z0-9._-]{1,64}\z/', $generated);
+        $this->assertNotSame($traceId, $generated);
+        $response->assertHeader('X-Trace-Id', $generated);
+        $this->assertDatabaseHas('refunds', ['id' => $response->json('data.id'), 'trace_id' => $generated]);
+    }
+
+    public static function invalidTraceIds(): array
+    {
+        return [
+            'too long for ledger' => [str_repeat('x', 200)],
+            'one over the limit' => [str_repeat('x', 65)],
+            'empty' => [''],
+            'spaces' => ['trace id'],
+            'newline' => ["trace\n"],
+            'slash' => ['trace/id'],
+            'non-ascii' => ['tracé'],
+        ];
+    }
+
+    #[Test]
+    public function valid_trace_id_at_the_length_limit_is_preserved(): void
+    {
+        $order = $this->createOrder();
+        $traceId = 'AZaz09._-'.str_repeat('x', 55);
+        $response = $this->postJson($this->url($order), $this->body(), $this->headers($order) + ['X-Trace-Id' => $traceId])
+            ->assertCreated()->assertJsonPath('data.trace_id', $traceId)->assertHeader('X-Trace-Id', $traceId);
+
+        $this->assertDatabaseHas('refunds', ['id' => $response->json('data.id'), 'trace_id' => $traceId]);
     }
 
     #[Test]
@@ -310,17 +350,18 @@ final class CreateRefundTest extends TestCase
     }
 
     #[Test]
-    public function every_gateway_throwable_leaves_pending_and_logs_identifiers_without_exception_message(): void
+    public function every_gateway_throwable_leaves_pending_and_logs_identifiers_and_diagnostics(): void
     {
         $order = $this->createOrder();
         Log::spy();
         $gateway = Mockery::mock(PaymentGatewayInterface::class);
-        $gateway->shouldReceive('refund')->once()->andThrow(new \Error('sensitive-provider-detail'));
+        $gateway->shouldReceive('refund')->once()->andThrow(new \Error('Provider is unavailable.'));
         $this->app->instance(PaymentGatewayInterface::class, $gateway);
         $response = $this->postJson($this->url($order), $this->body(), $this->headers($order) + ['X-Trace-Id' => 'throwable-trace'])
             ->assertCreated()->assertJsonPath('data.status', 'PENDING');
         Log::shouldHaveReceived('warning')->once()->with('Refund gateway outcome is unknown.', [
             'trace_id' => 'throwable-trace', 'refund_id' => $response->json('data.id'),
+            'exception_class' => \Error::class, 'message' => 'Provider is unavailable.',
         ]);
         $this->assertDatabaseHas('refunds', ['id' => $response->json('data.id'), 'status' => 'PENDING']);
     }
@@ -369,7 +410,7 @@ final class CreateRefundTest extends TestCase
 
                 return $lookups === 1 ? null : $stored;
             });
-        $repository->shouldReceive('forOrderLocked')->with($order->id)->once()->andReturn([]);
+        $repository->shouldReceive('forOrder')->with($order->id)->once()->andReturn([]);
         $repository->shouldReceive('create')->once()->andThrow(new UniqueConstraintViolationException(
             'sqlite', 'insert into refunds', [], new \RuntimeException('Simulated duplicate key')
         ));
@@ -383,7 +424,7 @@ final class CreateRefundTest extends TestCase
 
         $repository = Mockery::mock(RefundRepositoryInterface::class);
         $repository->shouldReceive('findByKey')->with('refund-key-0001')->twice()->andReturn(null, $stored);
-        $repository->shouldReceive('forOrderLocked')->with($order->id)->once()->andReturn([]);
+        $repository->shouldReceive('forOrder')->with($order->id)->once()->andReturn([]);
         $repository->shouldReceive('create')->once()->andThrow(new UniqueConstraintViolationException(
             'sqlite', 'insert into refunds', [], new \RuntimeException('Simulated duplicate key')
         ));

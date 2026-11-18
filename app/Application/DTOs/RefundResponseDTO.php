@@ -15,6 +15,7 @@ final readonly class RefundResponseDTO
         return new self([
             'id' => $refund->id,
             'order_id' => $refund->order_id,
+            'customer_id' => $refund->customer_id,
             'amount' => $refund->amount,
             'reason' => $refund->reason,
             'mode' => $refund->mode,

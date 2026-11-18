@@ -193,7 +193,6 @@ jobs:
         run: |
           cp .env.example .env
           sed -i "s|^APP_KEY=.*|APP_KEY=base64:$(openssl rand -base64 32)|" .env
-          echo 'SIMULATED_REFUND_FORCE_OUTCOME=success' >> .env
 
       # A fresh hosted runner has no project image; build the checked-out inputs.
       - name: Run real MySQL concurrency suite

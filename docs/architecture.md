@@ -241,6 +241,10 @@ validate `X-Customer-Id` and check ownership; the Ops queue, history and decisio
 require only the service token. This is a trusted-service boundary, not end-user
 authentication or separate human-role authorization. Public routes retain their
 existing behavior. See the [Refunds API contract](../README.md#refunds-api).
+Refund response objects include `customer_id` on every refund endpoint. The Ops
+queue accepts `PENDING_APPROVAL` and `PENDING` (stuck executions), each oldest
+first with an ID tiebreaker and a maximum of 50 rows. Rate limiting returns
+structured JSON with `message`, `error_code: RATE_LIMIT_EXCEEDED`, and `retry_after`.
 
 ```mermaid
 sequenceDiagram
@@ -257,7 +261,7 @@ sequenceDiagram
         API->>DB: COMMIT
         Note over API: Return existing result; PENDING replay retries execution below
     else New request on PAID order
-        API->>DB: Lock refund rows; compute reserved using bcmath
+        API->>DB: Read refund rows after order lock; compute reserved using bcmath
         Note over API,DB: Reject if reserved + amount exceeds order total
         API->>DB: Reserve PENDING or PENDING_APPROVAL; COMMIT
     end
@@ -297,8 +301,12 @@ sequenceDiagram
 
 `refunds` is the source of truth for both reserved and succeeded amounts.
 `PENDING_APPROVAL`, `PENDING`, and `SUCCEEDED` reserve money; `REJECTED` and
-`FAILED` do not. Every refund-mutating transaction starts with the order row
-lock, establishing one serialization point for reservation and decisions.
+`FAILED` do not. Every refund transaction locks the order row first; refund rows
+are read after that lock, establishing one serialization point for reservation
+and decisions without refund-collection gap locks. Decisions and execution retain
+the single-refund primary-key lock. Each transaction allows up to three attempts
+on a deadlock. Orders referenced by refund ledger entries are protected from
+deletion by a restrictive foreign key.
 Monetary values are decimal strings and arithmetic uses bcmath at scale 2;
 `RefundAmounts::reserved(rows) <= order.total_amount` is the per-order invariant.
 The fingerprint includes order, customer, normalized amount and mode; `reason`
@@ -313,19 +321,26 @@ the order `PAID`; full success conditionally marks it `REFUNDED`.
 Gateway calls are plain application code after commit, not transaction callbacks.
 An exception or a crash after reservation retains `PENDING`; create replay or
 `refunds:reconcile {refundId}` retries with the persisted provider identity.
+`refunds:reconcile --all-pending` instead retries the oldest 100 `PENDING` refunds
+and prints one `<refundId>: <status>` line per refund. The forms are mutually
+exclusive. Gateway exceptions log their class and message alongside the refund
+and trace IDs; an invalid incoming trace ID is replaced with a UUID before use.
 There is no scheduled refund reconciler. The simulator's unique operation ledger
 models one logical side effect per key; it is not proof of a real provider's
 settlement or recovery behavior.
 
 `RefundConcurrencyTest` uses independent PHP processes released by the existing
 Redis barrier, HTTP through integration nginx/PHP-FPM, and committed MySQL rows.
-It covers the paid cap, identical-key creates, and competing approvals, ending
-each case with a database-wide per-order reservation check. The HTTP service and
+It covers the paid cap, identical-key creates, competing approvals, first refunds
+on eight distinct orders, and same-key conflicts across two orders, ending each
+case with a database-wide per-order reservation check. The HTTP service and
 tests use the integration environment's deterministic refund `success` outcome;
 the tests fail setup if the shared configuration selects another outcome or a
 timeout. The k6 refund scenario separately races 50 held requests against a
-fresh `100.00` order. These are test artifacts; actual run evidence must be
-recorded separately. Neither establishes production deployment or real payments.
+fresh `100.00` order. The verified refund race is recorded in
+[`load-tests/results.md`](../load-tests/results.md); the two additional cross-order
+regressions require a fresh real-MySQL run. This evidence does not establish
+production deployment or real payments.
 
 ## Distributed Locking Strategy
 

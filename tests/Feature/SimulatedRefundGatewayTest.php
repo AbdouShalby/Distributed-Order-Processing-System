@@ -238,7 +238,7 @@ final class SimulatedRefundGatewayTest extends TestCase
             Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
             $this->assertSame([$refund->id], array_map(
                 static fn (Refund $row): int => $row->id,
-                $repository->forOrderLocked($order->id)
+                $repository->forOrder($order->id)
             ));
             $locked = $repository->lockById($refund->id);
             $locked->status = RefundStatus::FAILED;
@@ -247,8 +247,15 @@ final class SimulatedRefundGatewayTest extends TestCase
         });
         $this->assertSame(RefundStatus::FAILED, $refund->fresh()->status);
         $this->assertSame('Provider declined the refund.', $refund->fresh()->failure_message);
-        $order->delete();
-        $this->assertDatabaseCount('refunds', 0);
+        try {
+            $order->delete();
+            $this->fail('Orders with refund ledger entries must not be deleted.');
+        } catch (\Illuminate\Database\QueryException $e) {
+            $this->assertSame('23000', $e->errorInfo[0]);
+        }
+        $this->assertDatabaseHas('orders', ['id' => $order->id]);
+        $this->assertDatabaseHas('refunds', ['id' => $refund->id, 'order_id' => $order->id, 'status' => 'FAILED']);
+        $this->assertDatabaseCount('refunds', 1);
     }
 
     #[Test]
@@ -271,8 +278,8 @@ final class SimulatedRefundGatewayTest extends TestCase
         $other->forceFill(['created_at' => '2026-11-18 11:00:00'])->save();
         $ids = static fn (array $rows): array => array_map(static fn (Refund $refund): int => $refund->id, $rows);
 
-        $this->assertSame([$old->id, $boundary->id], $ids($repository->pendingApproval(50)));
-        $this->assertSame([$old->id], $ids($repository->pendingApproval(1)));
+        $this->assertSame([$old->id, $boundary->id], $ids($repository->withStatus(RefundStatus::PENDING_APPROVAL, 50)));
+        $this->assertSame([$old->id], $ids($repository->withStatus(RefundStatus::PENDING_APPROVAL, 1)));
         $this->assertSame([$recent->id, $boundary->id], $ids($repository->forCustomerSince(
             $order->user_id,
             new \DateTimeImmutable('2026-11-17T10:00:00+00:00')

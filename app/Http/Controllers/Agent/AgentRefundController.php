@@ -11,6 +11,7 @@ use App\Domain\Order\Contracts\OrderRepositoryInterface;
 use App\Domain\Order\Exceptions\IdempotencyConflictException;
 use App\Domain\Order\Exceptions\OrderNotFoundException;
 use App\Domain\Refund\Contracts\RefundRepositoryInterface;
+use App\Domain\Refund\RefundStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CreateRefundRequest;
 use App\Http\Requests\DecideRefundRequest;
@@ -95,12 +96,12 @@ final class AgentRefundController extends Controller
     {
         // Validate the original query so global trimming cannot accept a different status.
         parse_str($request->getQueryString() ?? '', $query);
-        Validator::make($query, ['status' => ['required', 'string', 'in:PENDING_APPROVAL']])->validate();
+        $validated = Validator::make($query, ['status' => ['required', 'string', 'in:PENDING_APPROVAL,PENDING']])->validate();
 
         return response()->json([
             'data' => array_map(
                 fn (Refund $refund): array => RefundResponseDTO::fromModel($refund)->toArray(),
-                $this->refunds->pendingApproval(50),
+                $this->refunds->withStatus(RefundStatus::from($validated['status']), 50),
             ),
         ]);
     }

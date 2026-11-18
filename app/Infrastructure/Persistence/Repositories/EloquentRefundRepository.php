@@ -15,11 +15,9 @@ final class EloquentRefundRepository implements RefundRepositoryInterface
         return Refund::query()->where('idempotency_key', $key)->first();
     }
 
-    public function forOrderLocked(int $orderId): array
-    {
-        return Refund::query()->where('order_id', $orderId)->lockForUpdate()->get()->all();
-    }
-
+    /**
+     * Inside a refund transaction, the order row must already be locked.
+     */
     public function forOrder(int $orderId): array
     {
         return Refund::query()
@@ -57,10 +55,10 @@ final class EloquentRefundRepository implements RefundRepositoryInterface
         return $orderId === null ? null : (int) $orderId;
     }
 
-    public function pendingApproval(int $limit): array
+    public function withStatus(RefundStatus $status, int $limit): array
     {
         return Refund::query()
-            ->where('status', RefundStatus::PENDING_APPROVAL->value)
+            ->where('status', $status->value)
             ->oldest()
             ->orderBy('id')
             ->limit($limit)
