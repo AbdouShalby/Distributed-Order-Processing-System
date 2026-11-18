@@ -1,0 +1,70 @@
+{
+  "customers": [
+    {"id": 1, "name": "Customer A"},
+    {"id": 2, "name": "Customer B"},
+    {"id": 3, "name": "Customer C"}
+  ],
+  "orders": [
+    {
+      "id": 1001, "user_id": 1, "status": "PAID", "total_amount": "20.00",
+      "created_days_ago": 2,
+      "items": [{"product_id": 1, "quantity": 2, "unit_price": "10.00"}]
+    },
+    {
+      "id": 1002, "user_id": 1, "status": "PAID", "total_amount": "80.00",
+      "created_days_ago": 5,
+      "items": [{"product_id": 2, "quantity": 1, "unit_price": "50.00"},
+                {"product_id": 3, "quantity": 2, "unit_price": "15.00"}]
+    },
+    {
+      "id": 1003, "user_id": 1, "status": "PAID", "total_amount": "450.00",
+      "created_days_ago": 3,
+      "items": [{"product_id": 4, "quantity": 1, "unit_price": "300.00"},
+                {"product_id": 5, "quantity": 2, "unit_price": "50.00"},
+                {"product_id": 2, "quantity": 1, "unit_price": "50.00"}]
+    },
+    {
+      "id": 1004, "user_id": 1, "status": "PAID", "total_amount": "100.00",
+      "created_days_ago": 1,
+      "items": [{"product_id": 2, "quantity": 2, "unit_price": "50.00"}]
+    },
+    {
+      "id": 1005, "user_id": 1, "status": "PENDING", "total_amount": "60.00",
+      "created_days_ago": 1,
+      "items": [{"product_id": 6, "quantity": 3, "unit_price": "20.00"}]
+    },
+    {
+      "id": 1006, "user_id": 1, "status": "CANCELLED", "total_amount": "40.00",
+      "created_days_ago": 1,
+      "items": [{"product_id": 6, "quantity": 2, "unit_price": "20.00"}]
+    },
+    {
+      "id": 1007, "user_id": 1, "status": "REFUNDED", "total_amount": "30.00",
+      "created_days_ago": 10,
+      "items": [{"product_id": 3, "quantity": 2, "unit_price": "15.00"}],
+      "refunds": [{"amount": "30.00", "status": "SUCCEEDED", "mode": "auto",
+                   "reason": "Seeded refund", "created_days_ago": 9, "decided_by": null}]
+    },
+    {
+      "id": 1008, "user_id": 1, "status": "PAID", "total_amount": "70.00",
+      "created_days_ago": 45,
+      "items": [{"product_id": 2, "quantity": 1, "unit_price": "50.00"},
+                {"product_id": 6, "quantity": 1, "unit_price": "20.00"}]
+    },
+    {
+      "id": 1009, "user_id": 2, "status": "PAID", "total_amount": "120.00",
+      "created_days_ago": 2,
+      "items": [{"product_id": 6, "quantity": 6, "unit_price": "20.00"}]
+    },
+    {
+      "id": 1010, "user_id": 2, "status": "PAID", "total_amount": "25.00",
+      "created_days_ago": 1,
+      "items": [{"product_id": 7, "quantity": 1, "unit_price": "25.00"}]
+    },
+    {
+      "id": 1011, "user_id": 3, "status": "PAID", "total_amount": "300.00",
+      "created_days_ago": 4,
+      "items": [{"product_id": 4, "quantity": 1, "unit_price": "300.00"}]
+    }
+  ]
+}
