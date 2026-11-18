@@ -14,10 +14,57 @@ recovery, and representative failure-window reasoning. It uses a simulated
 provider, includes operational scheduler wiring, and makes no live-payment or
 exactly-once claim.
 
+## Demo video
+
+<!-- VIDEO: GitHub user-attachments URL goes here -->
+
+A narrated walkthrough of about 100 seconds: the architecture, the two stock locks, durable idempotency, the payment state machine, a real k6 run, the tests and CI.
+
+There is no hosted demo: the stack needs MySQL, Redis, queue workers and a scheduler. The video shows a real local run instead, and the steps below reproduce it.
+
+### Verified local run (2026-11-18)
+
+Commit `a92b4e4`, `grafana/k6:1.0.0`, 50 virtual users per test. These are correctness results only; latency and throughput are not reported. The full run, with environment details, is in [`load-tests/results.md`](load-tests/results.md).
+
+| Test | Result |
+|------|--------|
+| Oversell: 50 buyers, product with stock 1 | 1 order created (201), 49 rejected (409), stock 1 to 0 |
+| Idempotency: 50 copies of one request, same key, same moment | 1 order created (201), 49 replays of the original order (200), 0 errors, one `idempotency_requests` row |
+
+### Reproduce it locally
+
+Complete the [Quick Start](#quick-start) first, then from the repository root:
+
+```bash
+docker compose exec app php artisan migrate:fresh --seed
+docker compose exec redis redis-cli FLUSHALL
+docker network ls   # find <compose-project>_dops-network
+
+docker run --rm --network <compose-project>_dops-network \
+  -e BASE_URL=http://nginx \
+  -v "$(pwd)/load-tests:/scripts:ro" \
+  grafana/k6:1.0.0 run /scripts/oversell-test.js
+```
+
+The API is rate limited to 60 requests per minute per client, so run the two tests a minute apart or clear Redis between them. Reset, then run the idempotency test:
+
+```bash
+docker compose exec app php artisan migrate:fresh --seed
+docker compose exec redis redis-cli FLUSHALL
+
+docker run --rm --network <compose-project>_dops-network \
+  -e BASE_URL=http://nginx \
+  -v "$(pwd)/load-tests:/scripts:ro" \
+  grafana/k6:1.0.0 run /scripts/idempotency-test.js
+```
+
+Expected: oversell gives 1 created and 49 rejected; idempotency gives 1 created (201), 49 replays (200) and 0 errors.
+
 ---
 
 ## Table of Contents
 
+- [Demo video](#demo-video)
 - [What This Project Proves](#what-this-project-proves)
 - [What This Project Does Not Prove](#what-this-project-does-not-prove)
 - [Tech Stack](#tech-stack)
