@@ -72,8 +72,9 @@ payment guarantees.
   present, but end-to-end authenticated private-channel access is not proven.
 - Cache, queue, locks, sessions, and scheduler mutexes still share one
   eviction-prone Redis instance; a transactional outbox is not implemented.
-- No current k6 result is committed as benchmark evidence because the historical
-  notes lacked raw output, a run date, environment details, and commit identity.
+- The committed k6 results ([`load-tests/results.md`](load-tests/results.md))
+  are correctness results from one local run, not a performance benchmark; no
+  latency or throughput figures are claimed.
 - This repository contains no 30k-concurrency or production-scale proof; any
   such experience would require separate, attributable evidence.
 
@@ -936,11 +937,17 @@ documented date, git commit, host/runtime description, exact command, and summar
 
 ### Current Benchmark Status
 
-No k6 result file is included in this showcase checkpoint. Historical notes
-were reviewed but excluded because the original run date, git commit, raw k6
-output, and exact environment were not retained. The real MySQL/Redis PHPUnit
-process-concurrency suite below is current correctness evidence; it is not a
-performance benchmark.
+[`load-tests/results.md`](load-tests/results.md) records a real local run of
+`oversell-test.js` and `idempotency-test.js` on 2026-11-18 against commit
+`a92b4e4` with `grafana/k6:1.0.0`: one order created and forty-nine rejected
+for the last unit (stock 1 → 0), and one order created with forty-nine
+replays of it for fifty concurrent copies of the same request (zero errors).
+It is correctness evidence only; response times on that workstation are not
+representative and are not reported. `high-load-test.js` was not re-run, and
+earlier notes without a run date, commit or raw output were excluded. The API
+is rate limited to 60 requests per minute, so run the scenarios a minute apart
+or clear Redis between them. The real MySQL/Redis PHPUnit process-concurrency
+suite below remains the main concurrency evidence.
 
 ---
 
