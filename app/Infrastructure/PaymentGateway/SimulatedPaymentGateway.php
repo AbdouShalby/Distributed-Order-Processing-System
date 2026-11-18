@@ -45,11 +45,49 @@ class SimulatedPaymentGateway implements PaymentGatewayInterface
             ? 'Payment processed successfully.'
             : 'Simulated payment decline.';
 
+        return $this->recordOperation($orderId, $amount, $providerIdempotencyKey, 'charge', $status, $message);
+    }
+
+    public function refund(
+        int $orderId,
+        string $amount,
+        string $providerIdempotencyKey
+    ): PaymentResult {
+        usleep(random_int(50_000, 200_000));
+
+        $forcedOutcome = config('services.simulated_payment.refund_force_outcome');
+        $isSuccess = match ($forcedOutcome) {
+            'success' => true,
+            'decline' => false,
+            default => throw new \InvalidArgumentException(
+                "Unsupported simulated refund outcome '{$forcedOutcome}'."
+            ),
+        };
+
+        return $this->recordOperation(
+            $orderId,
+            $amount,
+            $providerIdempotencyKey,
+            'refund',
+            $isSuccess ? 'SUCCEEDED' : 'DECLINED',
+            $isSuccess ? 'Refund processed successfully.' : 'Simulated refund decline.'
+        );
+    }
+
+    private function recordOperation(
+        int $orderId,
+        string $amount,
+        string $providerIdempotencyKey,
+        string $operationType,
+        string $status,
+        string $message
+    ): PaymentResult {
         // This table models the provider's durable idempotency ledger. The
         // unique key ensures concurrent retries create one logical side effect.
         $inserted = DB::table('simulated_payment_operations')->insertOrIgnore([
             'idempotency_key' => $providerIdempotencyKey,
             'order_id' => $orderId,
+            'operation' => $operationType,
             'amount' => $amount,
             'status' => $status,
             'message' => $message,
@@ -68,7 +106,8 @@ class SimulatedPaymentGateway implements PaymentGatewayInterface
             ->firstOrFail();
 
         if ((int) $operation->order_id !== $orderId
-            || bccomp((string) $operation->amount, $amount, 2) !== 0) {
+            || bccomp((string) $operation->amount, $amount, 2) !== 0
+            || $operation->operation !== $operationType) {
             throw new \DomainException(
                 'Provider idempotency key was reused for a different payment operation.'
             );

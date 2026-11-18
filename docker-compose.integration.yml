@@ -38,6 +38,7 @@ services:
       - integration-vendor:/var/www/vendor
     environment: &integration-environment
       APP_ENV: integration
+      AGENT_SERVICE_TOKEN: integration-agent-token-not-secret
       APP_KEY: ${APP_KEY:?Set APP_KEY in .env first (php artisan key:generate), see Quick Start}
       APP_DEBUG: "true"
       APP_URL: http://nginx

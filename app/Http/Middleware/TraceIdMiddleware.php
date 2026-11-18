@@ -18,7 +18,10 @@ class TraceIdMiddleware
 {
     public function handle(Request $request, Closure $next): Response
     {
-        $traceId = $request->header('X-Trace-Id') ?? Str::uuid()->toString();
+        $traceId = $request->header('X-Trace-Id');
+        if (! is_string($traceId) || preg_match('/\A[A-Za-z0-9._-]{1,64}\z/', $traceId) !== 1) {
+            $traceId = Str::uuid()->toString();
+        }
 
         // Add to logging context so all logs in this request include trace_id
         Log::shareContext(['trace_id' => $traceId]);

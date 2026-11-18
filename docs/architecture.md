@@ -234,6 +234,114 @@ this milestone. Broadcast delivery also remains outside the database transaction
 
 ---
 
+## Refund Reservation, Approval and Execution
+
+Agent routes require a configured shared service token. Customer routes also
+validate `X-Customer-Id` and check ownership; the Ops queue, history and decisions
+require only the service token. This is a trusted-service boundary, not end-user
+authentication or separate human-role authorization. Public routes retain their
+existing behavior. See the [Refunds API contract](../README.md#refunds-api).
+Refund response objects include `customer_id` on every refund endpoint. The Ops
+queue accepts `PENDING_APPROVAL` and `PENDING` (stuck executions), each oldest
+first with an ID tiebreaker and a maximum of 50 rows. Rate limiting returns
+structured JSON with `message`, `error_code: RATE_LIMIT_EXCEEDED`, and `retry_after`.
+
+```mermaid
+sequenceDiagram
+    participant Caller as Agent / Ops
+    participant API as Agent API / Use Cases
+    participant DB as MySQL
+    participant Gateway as Simulated Refund Provider
+
+    Caller->>API: Create refund (token, customer, amount string, key, mode)
+    API->>DB: BEGIN; lock owned order FIRST
+    API->>DB: Look up key; check fingerprint before new-refund rules
+    alt Exact replay
+        DB-->>API: Existing refund
+        API->>DB: COMMIT
+        Note over API: Return existing result; PENDING replay retries execution below
+    else New request on PAID order
+        API->>DB: Read refund rows after order lock; compute reserved using bcmath
+        Note over API,DB: Reject if reserved + amount exceeds order total
+        API->>DB: Reserve PENDING or PENDING_APPROVAL; COMMIT
+    end
+
+    alt Held for approval
+        API-->>Caller: PENDING_APPROVAL (new create: 201)
+        Caller->>API: Approve or reject (token, decided_by; rejection reason)
+        API->>DB: Read order_id before transaction
+        API->>DB: BEGIN; lock order FIRST, then refund
+        alt Approve PENDING_APPROVAL
+            API->>DB: Set PENDING and decision audit fields; COMMIT
+        else Reject PENDING_APPROVAL
+            API->>DB: Set REJECTED and reason; COMMIT (release reservation)
+            API-->>Caller: 200 REJECTED; no gateway call
+        else Already decided
+            API->>DB: ROLLBACK
+            API-->>Caller: 409 REFUND_NOT_PENDING_APPROVAL
+        end
+    end
+
+    opt Refund is PENDING (auto, approval, replay, or reconcile)
+        API->>Gateway: Refund with stored provider key, OUTSIDE transaction
+        alt Success or definitive decline
+            Gateway-->>API: Durable idempotent outcome
+            API->>DB: BEGIN; lock order FIRST, then refund
+            API->>DB: If still PENDING, set SUCCEEDED or FAILED
+            opt Succeeded total equals paid total
+                API->>DB: Conditional PAID to REFUNDED
+            end
+            API->>DB: COMMIT
+        else Exception / timeout / unknown result
+            Note over API,DB: Leave PENDING reserved; retry stored provider key later
+        end
+        API-->>Caller: Refund with current status
+    end
+```
+
+`refunds` is the source of truth for both reserved and succeeded amounts.
+`PENDING_APPROVAL`, `PENDING`, and `SUCCEEDED` reserve money; `REJECTED` and
+`FAILED` do not. Every refund transaction locks the order row first; refund rows
+are read after that lock, establishing one serialization point for reservation
+and decisions without refund-collection gap locks. Decisions and execution retain
+the single-refund primary-key lock. Each transaction allows up to three attempts
+on a deadlock. Orders referenced by refund ledger entries are protected from
+deletion by a restrictive foreign key.
+Monetary values are decimal strings and arithmetic uses bcmath at scale 2;
+`RefundAmounts::reserved(rows) <= order.total_amount` is the per-order invariant.
+The fingerprint includes order, customer, normalized amount and mode; `reason`
+is excluded. Foreign ownership is rejected before idempotency lookup.
+
+`auto` reserves `PENDING` only when cumulative reserved-after-create is within
+`services.refunds.auto_approve_limit` (default `50.00`); otherwise it reserves
+`PENDING_APPROVAL`. Empty or malformed limits hold everything. Human approval
+transitions the already reserved amount to `PENDING`. Partial success leaves
+the order `PAID`; full success conditionally marks it `REFUNDED`.
+
+Gateway calls are plain application code after commit, not transaction callbacks.
+An exception or a crash after reservation retains `PENDING`; create replay or
+`refunds:reconcile {refundId}` retries with the persisted provider identity.
+`refunds:reconcile --all-pending` instead retries the oldest 100 `PENDING` refunds
+and prints one `<refundId>: <status>` line per refund. The forms are mutually
+exclusive. Gateway exceptions log their class and message alongside the refund
+and trace IDs; an invalid incoming trace ID is replaced with a UUID before use.
+There is no scheduled refund reconciler. The simulator's unique operation ledger
+models one logical side effect per key; it is not proof of a real provider's
+settlement or recovery behavior.
+
+`RefundConcurrencyTest` uses independent PHP processes released by the existing
+Redis barrier, HTTP through integration nginx/PHP-FPM, and committed MySQL rows.
+It covers the paid cap, identical-key creates, competing approvals, first refunds
+on eight distinct orders, and same-key conflicts across two orders, ending each
+case with a database-wide per-order reservation check. The HTTP service and
+tests use the integration environment's deterministic refund `success` outcome;
+the tests fail setup if the shared configuration selects another outcome or a
+timeout. The k6 refund scenario separately races 50 held requests against a
+fresh `100.00` order. The verified refund race is recorded in
+[`load-tests/results.md`](../load-tests/results.md); the two additional cross-order
+regressions require a fresh real-MySQL run. This evidence does not establish
+production deployment or real payments.
+
 ## Distributed Locking Strategy
 
 ```mermaid

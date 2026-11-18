@@ -34,6 +34,18 @@ while ($redis->get("{$barrier}:start") !== 'go') {
 
 try {
     $result = match ($action) {
+        'refund-create' => IntegrationHttpClient::request(
+            'POST',
+            '/api/agent/orders/'.$payload['order_id'].'/refunds',
+            $payload['body'],
+            $payload['headers']
+        ),
+        'refund-approve' => IntegrationHttpClient::request(
+            'POST',
+            '/api/agent/refunds/'.$payload['refund_id'].'/approve',
+            $payload['body'],
+            $payload['headers']
+        ),
         'http' => IntegrationHttpClient::request(
             $payload['method'],
             $payload['path'],

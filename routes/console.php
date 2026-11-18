@@ -1,8 +1,14 @@
 <?php
 
+declare(strict_types=1);
+
+use App\Application\UseCases\ExecuteRefund\ExecuteRefundUseCase;
 use App\Application\UseCases\ProcessOrder\ApproveLegacyProcessingRetryUseCase;
 use App\Application\UseCases\ProcessOrder\RecoverExpiredProcessingOrdersUseCase;
 use App\Domain\Order\Enums\ProcessingRecoveryState;
+use App\Domain\Refund\Contracts\RefundRepositoryInterface;
+use App\Domain\Refund\RefundStatus;
+use App\Models\Refund;
 use Illuminate\Console\Command;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -78,6 +84,44 @@ Artisan::command(
         return Command::SUCCESS;
     }
 )->purpose('Allow retry only after confirming the historical payment never started');
+
+Artisan::command('refunds:reconcile {refundId?} {--all-pending}', function () {
+    if ($this->option('all-pending')) {
+        if ($this->argument('refundId') !== null) {
+            $this->error('Choose a refund ID or --all-pending, not both.');
+
+            return Command::FAILURE;
+        }
+
+        foreach (app(RefundRepositoryInterface::class)->withStatus(RefundStatus::PENDING, 100) as $refund) {
+            $refund = app(ExecuteRefundUseCase::class)->execute($refund->id);
+            $this->info("{$refund->id}: {$refund->status->value}");
+        }
+
+        return Command::SUCCESS;
+    }
+
+    if ($this->argument('refundId') === null) {
+        $this->error('Provide a refund ID or --all-pending.');
+
+        return Command::FAILURE;
+    }
+
+    $refund = Refund::query()->find((int) $this->argument('refundId'));
+    if ($refund === null) {
+        $this->error('Refund not found.');
+
+        return Command::FAILURE;
+    }
+
+    if ($refund->status === RefundStatus::PENDING) {
+        $refund = app(ExecuteRefundUseCase::class)->execute($refund->id);
+    }
+
+    $this->info($refund->status->value);
+
+    return Command::SUCCESS;
+})->purpose('Reconcile pending refunds using their stored provider idempotency keys');
 
 Schedule::command('orders:recover-expired --limit=100')
     ->everyMinute()

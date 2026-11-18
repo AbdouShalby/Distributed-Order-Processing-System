@@ -25,6 +25,7 @@ class OrderStatusTest extends TestCase
             'PENDING → CANCELLED' => [OrderStatus::PENDING, OrderStatus::CANCELLED],
             'PROCESSING → PAID' => [OrderStatus::PROCESSING, OrderStatus::PAID],
             'PROCESSING → FAILED' => [OrderStatus::PROCESSING, OrderStatus::FAILED],
+            'PAID → REFUNDED' => [OrderStatus::PAID, OrderStatus::REFUNDED],
         ];
     }
 
@@ -49,6 +50,11 @@ class OrderStatusTest extends TestCase
             'FAILED → PAID' => [OrderStatus::FAILED, OrderStatus::PAID],
             'CANCELLED → PENDING' => [OrderStatus::CANCELLED, OrderStatus::PENDING],
             'CANCELLED → PROCESSING' => [OrderStatus::CANCELLED, OrderStatus::PROCESSING],
+            'CANCELLED → REFUNDED' => [OrderStatus::CANCELLED, OrderStatus::REFUNDED],
+            'FAILED → REFUNDED' => [OrderStatus::FAILED, OrderStatus::REFUNDED],
+            'PENDING → REFUNDED' => [OrderStatus::PENDING, OrderStatus::REFUNDED],
+            'REFUNDED → PAID' => [OrderStatus::REFUNDED, OrderStatus::PAID],
+            'REFUNDED → CANCELLED' => [OrderStatus::REFUNDED, OrderStatus::CANCELLED],
         ];
     }
 
@@ -64,9 +70,10 @@ class OrderStatusTest extends TestCase
         return [
             'PENDING is not terminal' => [OrderStatus::PENDING, false],
             'PROCESSING is not terminal' => [OrderStatus::PROCESSING, false],
-            'PAID is terminal' => [OrderStatus::PAID, true],
+            'PAID is not terminal (it can be refunded)' => [OrderStatus::PAID, false],
             'FAILED is terminal' => [OrderStatus::FAILED, true],
             'CANCELLED is terminal' => [OrderStatus::CANCELLED, true],
+            'REFUNDED is terminal' => [OrderStatus::REFUNDED, true],
         ];
     }
 }

@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 return [
 
     /*
@@ -35,9 +37,19 @@ return [
         ],
     ],
 
+    'agent' => [
+        'token' => env('AGENT_SERVICE_TOKEN', ''),
+        'rate_limit_per_minute' => (int) env('AGENT_RATE_LIMIT_PER_MINUTE', 600),
+    ],
+
+    'refunds' => [
+        'auto_approve_limit' => env('REFUND_AUTO_APPROVE_LIMIT', '50.00'),
+    ],
+
     'simulated_payment' => [
         'lease_seconds' => (int) env('ORDER_PROCESSING_LEASE_SECONDS', 30),
         'force_outcome' => env('SIMULATED_PAYMENT_FORCE_OUTCOME'),
+        'refund_force_outcome' => env('SIMULATED_REFUND_FORCE_OUTCOME', 'success'),
         'fail_before_persist' => filter_var(
             env('SIMULATED_PAYMENT_FAIL_BEFORE_PERSIST', false),
             FILTER_VALIDATE_BOOL

@@ -255,6 +255,42 @@ class EloquentOrderRepository implements OrderRepositoryInterface
         return $model ? OrderMapper::toEntity($model) : null;
     }
 
+    public function markRefundedIfPaid(int $orderId): bool
+    {
+        return OrderModel::whereKey($orderId)
+            ->where('status', OrderStatus::PAID->value)
+            ->update([
+                'status' => OrderStatus::REFUNDED->value,
+                'updated_at' => now(),
+            ]) === 1;
+    }
+
+    /**
+     * Must be called inside a transaction and must be the first query of any refund transaction.
+     */
+    public function lockForCustomer(int $orderId, int $customerId): ?Order
+    {
+        $model = OrderModel::with('items')
+            ->whereKey($orderId)
+            ->where('user_id', $customerId)
+            ->lockForUpdate()
+            ->first();
+
+        return $model ? OrderMapper::toEntity($model) : null;
+    }
+
+    public function listForCustomer(int $customerId, int $limit): array
+    {
+        return OrderModel::with('items')
+            ->where('user_id', $customerId)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get()
+            ->map(fn (OrderModel $model) => OrderMapper::toEntity($model))
+            ->all();
+    }
+
     public function findByUserId(int $userId, ?string $status = null, int $page = 1, int $perPage = 15): array
     {
         $query = OrderModel::with('items')->where('user_id', $userId);

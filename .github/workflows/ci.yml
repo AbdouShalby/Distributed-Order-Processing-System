@@ -179,3 +179,25 @@ jobs:
           sleep 15
           docker compose ps
           docker compose down
+
+  # Real MySQL and Redis integration verification
+  integration:
+    name: MySQL & Redis Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare isolated environment
+        run: |
+          cp .env.example .env
+          sed -i "s|^APP_KEY=.*|APP_KEY=base64:$(openssl rand -base64 32)|" .env
+
+      # A fresh hosted runner has no project image; build the checked-out inputs.
+      - name: Run real MySQL concurrency suite
+        run: docker compose -p dops-ci -f docker-compose.integration.yml up --build --abort-on-container-exit --exit-code-from test
+
+      - name: Tear down isolated integration stack
+        if: always()
+        run: docker compose -p dops-ci -f docker-compose.integration.yml down -v

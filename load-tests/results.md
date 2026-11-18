@@ -62,6 +62,27 @@ same time.
 | Stock of product 1 after the run | 49 (seeded 50, one unit sold) |
 | k6 verdict | PASS |
 
+## Refund race test (`refund-race-test.js`)
+
+Run on 2026-11-18 against commit `f5e8579` (branch `feature/refunds-api`, final refund code; an earlier run on `0c8607d` gave the same result), same
+local Docker setup and `grafana/k6:1.0.0`. Reset: `migrate:fresh --seed`, then
+`db:seed --class=RefundDemoSeeder` (one `PAID` order of `100.00`), then
+`redis-cli FLUSHALL`. 50 virtual users each request a `needs_approval` refund
+of `10.00` with a unique idempotency key at the same moment.
+
+| Result | Value |
+|--------|-------|
+| Refunds accepted (`201`, held for approval) | 10 |
+| Rejected `422 REFUND_EXCEEDS_PAID` | 40 |
+| Unexpected responses | 0 |
+| Refund rows for the order (MySQL) | 10 |
+| Sum of refund amounts (MySQL) | 100.00 (equals the paid total) |
+| k6 verdict | PASS |
+
+The same invariant is covered by `tests/Integration/RefundConcurrencyTest.php`
+(real MySQL, separate PHP processes), which fails when the order row lock is
+removed.
+
 ## Not covered by this run
 
 `high-load-test.js` and the worker retry and payment scenarios were not
