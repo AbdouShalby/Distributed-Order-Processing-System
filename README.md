@@ -24,7 +24,7 @@ There is no hosted demo: the stack needs MySQL, Redis, queue workers and a sched
 
 ### Verified local run (2026-11-18)
 
-Commit `a92b4e4`, `grafana/k6:1.0.0`, 50 virtual users per test. These are correctness results only; latency and throughput are not reported. The full run, with environment details, is in [`load-tests/results.md`](load-tests/results.md).
+Commit `fd116be`, `grafana/k6:1.0.0`, 50 virtual users per test. These are correctness results only; latency and throughput are not reported. The full run, with environment details, is in [`load-tests/results.md`](load-tests/results.md).
 
 | Test | Result |
 |------|--------|
@@ -986,7 +986,7 @@ documented date, git commit, host/runtime description, exact command, and summar
 
 [`load-tests/results.md`](load-tests/results.md) records a real local run of
 `oversell-test.js` and `idempotency-test.js` on 2026-11-18 against commit
-`a92b4e4` with `grafana/k6:1.0.0`: one order created and forty-nine rejected
+`fd116be` with `grafana/k6:1.0.0`: one order created and forty-nine rejected
 for the last unit (stock 1 → 0), and one order created with forty-nine
 replays of it for fifty concurrent copies of the same request (zero errors).
 It is correctness evidence only; response times on that workstation are not
@@ -1118,7 +1118,8 @@ docker compose exec app php artisan test --testsuite=Feature
 # With coverage report
 docker compose exec app php artisan test --coverage
 
-# Isolated MySQL + Redis + nginx + independent PHP actor processes
+# Isolated MySQL + Redis + nginx + independent PHP actor processes.
+# Reads APP_KEY from .env (created by the Quick Start's key:generate).
 docker compose -p dops-m2-validation -f docker-compose.integration.yml up \
   --build --abort-on-container-exit --exit-code-from test
 

@@ -11,7 +11,7 @@ containers, so response times are not representative and are not reported.
 | Item | Value |
 |------|-------|
 | Date | 2026-11-18 |
-| Code | commit `a92b4e4`, exported with `git archive HEAD` |
+| Code | commit `fd116be` (application code; the run used the same tree before an unrelated integration-compose change), exported with `git archive` |
 | Stack | `docker compose` (Nginx, PHP 8.4 FPM, MySQL 8.0, Redis 7, queue worker, scheduler, Reverb) |
 | Load generator | `grafana/k6:1.0.0`, run in a container on the compose network |
 | Reset before each test | `php artisan migrate:fresh --seed` and `redis-cli FLUSHALL` |
