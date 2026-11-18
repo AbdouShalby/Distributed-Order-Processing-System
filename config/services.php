@@ -38,6 +38,7 @@ return [
     'simulated_payment' => [
         'lease_seconds' => (int) env('ORDER_PROCESSING_LEASE_SECONDS', 30),
         'force_outcome' => env('SIMULATED_PAYMENT_FORCE_OUTCOME'),
+        'refund_force_outcome' => env('SIMULATED_REFUND_FORCE_OUTCOME', 'success'),
         'fail_before_persist' => filter_var(
             env('SIMULATED_PAYMENT_FAIL_BEFORE_PERSIST', false),
             FILTER_VALIDATE_BOOL

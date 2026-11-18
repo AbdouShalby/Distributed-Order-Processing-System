@@ -17,4 +17,14 @@ interface PaymentGatewayInterface
         string $amount,
         string $providerIdempotencyKey
     ): PaymentResult;
+
+    /**
+     * Refund one logical operation. Every retry must reuse the same provider
+     * idempotency key, which must not have been used for a charge.
+     */
+    public function refund(
+        int $orderId,
+        string $amount,
+        string $providerIdempotencyKey
+    ): PaymentResult;
 }
