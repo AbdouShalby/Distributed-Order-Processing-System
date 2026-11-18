@@ -26,8 +26,13 @@ final class LegacyProcessingRecoveryTest extends IntegrationTestCase
     #[Test]
     public function upgrade_migration_classifies_a_pre_existing_processing_row(): void
     {
+        // Roll back to just before the correctness-metadata migration, however
+        // many later migrations exist, so the upgrade path is replayed in full.
+        $steps = DB::table('migrations')
+            ->where('migration', '>=', '2026_08_27_000001_add_correctness_metadata_to_orders_table')
+            ->count();
         $rolledBack = Artisan::call('migrate:rollback', [
-            '--step' => 4,
+            '--step' => $steps,
             '--force' => true,
         ]);
         $this->assertSame(0, $rolledBack);
